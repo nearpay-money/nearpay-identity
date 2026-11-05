@@ -1,0 +1,135 @@
+/** Dependencies shared by identity use cases. */
+import type { EnvelopeCipher, Kysely, Transaction } from "@nearpay-internal/db";
+import { emit, sql } from "@nearpay-internal/db";
+import { uuidv7 } from "@nearpay-internal/ids";
+import type { Logger, ServiceMetrics } from "@nearpay-internal/service";
+import type { Subject } from "@nearpay-internal/spec";
+import type { AuthzCache } from "../infra/cache.js";
+import type { Peers } from "../infra/clients/peers.js";
+import type { TurnstileVerifier } from "../infra/clients/turnstile.js";
+import type { OwnershipLookups } from "../infra/crypto/attestation.js";
+import type { DB } from "../infra/db/schema.js";
+import type { Signer } from "./tokens.js";
+
+export interface IdentityMetrics {
+  authz(result: string, seconds: number): void;
+  rateLimited(ptype: string): void;
+  destinationTransition(to: string): void;
+  attestationFailure(standard: string): void;
+  loginFailure(): void;
+}
+
+export const noMetrics: IdentityMetrics = {
+  authz() {},
+  rateLimited() {},
+  destinationTransition() {},
+  attestationFailure() {},
+  loginFailure() {},
+};
+
+export function identityMetrics(m: ServiceMetrics): IdentityMetrics {
+  const authz = m.histogram(
+    "authz_duration_seconds",
+    "Gateway authorisation latency.",
+    ["result"],
+    [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25],
+  );
+  const limited = m.counter("rate_limited_total", "Requests refused by the rate limiter.", ["ptype"]);
+  const transitions = m.counter("destination_transitions_total", "Settlement destination transitions.", ["to"]);
+  const attest = m.counter("attestation_failures_total", "Rejected destination attestations.", ["standard"]);
+  const login = m.counter("login_failures_total", "Failed passkey sign-ins and step-ups.");
+  return {
+    authz: (result, s) => authz.observe({ result }, s),
+    rateLimited: (ptype) => limited.inc({ ptype }),
+    destinationTransition: (to) => transitions.inc({ to }),
+    attestationFailure: (standard) => attest.inc({ standard }),
+    loginFailure: () => login.inc(),
+  };
+}
+
+export interface WebAuthnConfig {
+  readonly rpId: string;
+  readonly rpName: string;
+  readonly origins: readonly string[];
+}
+
+/** Everything the use cases need; api and worker build it with the parts they run. */
+export interface Identity {
+  readonly env: string;
+  readonly db: Kysely<DB>;
+  readonly cipher: EnvelopeCipher;
+  readonly log: Logger;
+  readonly metrics: IdentityMetrics;
+  readonly signer: Signer;
+  readonly peers: Peers;
+  readonly cooloffMs: number;
+  readonly recoveryLockMs: number;
+  readonly dashboardOrigin: string;
+  readonly webauthn: WebAuthnConfig;
+  readonly lookups: OwnershipLookups;
+  readonly turnstile: TurnstileVerifier;
+  readonly cache: AuthzCache;
+  readonly now: () => number;
+}
+
+export type Tx = Transaction<DB>;
+
+export async function dbNow(db: Kysely<DB> | Tx): Promise<Date> {
+  const r = await sql<{ now: Date }>`select now() as now`.execute(db);
+  return (r.rows[0] as { now: Date }).now;
+}
+
+export function emitEvent(
+  tx: Tx,
+  e: {
+    subject: Subject;
+    aggregate: { type: string; id: string; version: number };
+    accountUuid: string | null;
+    livemode: boolean | null;
+    object: unknown;
+    previous?: Record<string, unknown>;
+  },
+) {
+  return emit(tx, {
+    subject: e.subject,
+    aggregate: e.aggregate,
+    accountId: e.accountUuid,
+    livemode: e.livemode,
+    data: { object: e.object, ...(e.previous ? { previous: e.previous } : {}) },
+  });
+}
+
+export interface Actor {
+  readonly type: "user" | "api_key" | "service" | "ops" | "system";
+  readonly id: string;
+  readonly ip?: string | null;
+}
+
+/** Appends to the audit log (append-only table; security §12). */
+export async function audit(
+  id: Identity,
+  tx: Tx | Kysely<DB>,
+  a: {
+    accountUuid: string | null;
+    actor: Actor;
+    action: string;
+    target?: { type: string; id: string };
+    details?: Record<string, unknown>;
+  },
+): Promise<void> {
+  const eid = uuidv7();
+  await tx
+    .insertInto("audit_events")
+    .values({
+      id: eid,
+      account_id: a.accountUuid,
+      actor_type: a.actor.type,
+      actor_id: a.actor.id,
+      action: a.action,
+      target_type: a.target?.type ?? null,
+      target_id: a.target?.id ?? null,
+      details: JSON.stringify(a.details ?? {}),
+      ip_enc: a.actor.ip ? id.cipher.encrypt(a.actor.ip, `audit:${eid}:ip`) : null,
+    })
+    .execute();
+}

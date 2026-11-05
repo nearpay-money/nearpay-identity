@@ -1,0 +1,65 @@
+{
+  "name": "nearpay-identity",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Accounts, users and passkey sessions, API keys, settlement destinations with ownership attestation, gateway authorisation (internal JWTs), service tokens, settlement context.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22.11.0 <23"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "test": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:all": "vitest run",
+    "coverage": "vitest run --project unit --coverage",
+    "verify": "pnpm typecheck && pnpm lint && pnpm coverage && pnpm test:integration && pnpm build"
+  },
+  "dependencies": {
+    "@nats-io/transport-node": "3.4.0",
+    "@nearpay-internal/auth": "0.1.2",
+    "@nearpay-internal/bus": "0.1.2",
+    "@nearpay-internal/chains": "0.1.2",
+    "@nearpay-internal/db": "0.1.2",
+    "@nearpay-internal/http": "0.1.2",
+    "@nearpay-internal/ids": "0.1.2",
+    "@nearpay-internal/intents": "0.1.2",
+    "@nearpay-internal/service": "0.1.2",
+    "@nearpay-internal/spec": "0.1.2",
+    "@nearpay/spec": "0.1.2",
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "@simplewebauthn/server": "14.0.3",
+    "bs58": "6.0.0",
+    "ioredis": "6.0.0",
+    "lru-cache": "11.5.3",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.5",
+    "@nearpay-internal/testing": "0.1.2",
+    "@types/node": "22.20.5",
+    "@vitest/coverage-v8": "2.1.9",
+    "fast-check": "4.10.2",
+    "jose": "6.2.15",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
+  },
+  "pnpm": {
+    "overrides": {
+      "@nearpay/spec": "0.1.2",
+      "@nearpay-internal/spec": "0.1.2"
+    },
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "cpu-features",
+      "ssh2",
+      "protobufjs"
+    ]
+  }
+}
