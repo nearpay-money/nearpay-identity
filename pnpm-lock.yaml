@@ -435,47 +435,47 @@ packages:
       '@near-js/types': ^2.0.1
 
   '@nearpay-internal/auth@0.1.2':
-    resolution: {integrity: sha512-g5afnF9yN8lQ05I7q13KTjRwNynLY/H6dPSDLE7Jx6hI+NUTTwuOC0mR5V7njDYaP4x2MMN2QImqchlO6CY4Gg==}
+    resolution: {integrity: sha512-r+RPdDktbvDbYqmwODNoqT5cDAFeELXt9mUXCU/KSjOmcIAHJ+fPn+C9fJLQ7/X6BzanrDWGmuiK6mkj3nzTEw==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
 
   '@nearpay-internal/bus@0.1.2':
-    resolution: {integrity: sha512-Is1lVl4eMSWCcDuPLyJOKkQD03Ult2JccB1iqLVQ9e9oIx/SzK4b+xA5WHHnASYdRoJ5Rz74G63FhKgPnMWxFw==}
+    resolution: {integrity: sha512-l6HmO6Ts1w0MZ2MY0+GDbZ7C6SnajeMmbSyhG6UgXPZHmJxToExf7LjlEYfscMqCogBv8MWDD8VAnqxynKEIVw==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
 
   '@nearpay-internal/chains@0.1.2':
-    resolution: {integrity: sha512-FFBGi8MyB4yLdbgUzkXeSsFOHU0MkGPbBrNvbfrkYM3yGxXNCvLvOVT9pii4A6v0ss2eNfs1qIBx75C6ozyJtA==}
+    resolution: {integrity: sha512-NY8XEDsku3dQ15b6l3nH48qAlWiJOKCT1Q4KH8w55zbk4qdI/C/Y6gItcyDK9K2uPI9SOaaemKTGrHB4/H559w==}
     engines: {node: '>=22.11.0'}
 
   '@nearpay-internal/db@0.1.2':
-    resolution: {integrity: sha512-T0HVF9JOEP+BDQiSeXes7UVxnw0Z2Rm0CivG8ncFDAWHSx6QrrDflkKWO9JQ73T3b9vwiDXqnuntzHF5BmKzjQ==}
+    resolution: {integrity: sha512-XimAO9Sx6WFX+PvIO/ZK8wsUuoA5+XjfIShi8uQ8Y5dVqjXckGfuBydXjsBqboGKJtJH6PebofDgncvziszfHA==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
 
   '@nearpay-internal/http@0.1.2':
-    resolution: {integrity: sha512-a5DjQiH6qF62vUaT5y+3Dz4fWh2/YvwI2Vn3zHp0fPG7tIaGqhNOFl2n9MHDmTqqphjdR5LnTZUUyb+garLd9A==}
+    resolution: {integrity: sha512-5KlQEEc2/WKSWPv1/ibN5L188Q6dNFwTZsAesxZGdpdy0hAQ7Ybg85dhN/LFG7d0slVyEBV1zz18JHsFqLajUw==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
 
   '@nearpay-internal/ids@0.1.2':
-    resolution: {integrity: sha512-XcqR2UJpDUSHZdx4vCGXAccw76a2X1lsDuU59q8ZMrpExBd8tr0QRkmm53jjyNcUEcJvnASQueWVNXG2pwhgdg==}
+    resolution: {integrity: sha512-JWlvvHPxZw8oNwXDm7TH+gqZc6gGYFAiqVgdVwBmCIcJ9VYanADNfKLmk3K6ohFgaCL+8ua+cKQHMZ3SJHTOdw==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
 
   '@nearpay-internal/intents@0.1.2':
-    resolution: {integrity: sha512-pqoBWxoMMKCQpBoUkBK0C26h1UV3r7VKO6OBqt1D0VJmm2W6Uv4uMX92FyWxXoGNuFxL8ZWHRmkDX2Ni7GMQIQ==}
+    resolution: {integrity: sha512-BDMi1G7BoVlPM7z4TGGj5mx0Dp/sZ2Kbo1/z8UTsOqJB6lHnngDtQE83jJr2ySGEIRbUE5Emzw5HZNb99ShNVA==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
 
   '@nearpay-internal/service@0.1.2':
-    resolution: {integrity: sha512-4GMlhaCHmjj8MVV1f6qo2DBJAeTW06XU3hgym+pPMi7oJPn9xrXWEIf5EAgjIPhYL3xMO0xbarByb9y4dnFPxw==}
+    resolution: {integrity: sha512-wxLBy9hS/k2HUmC6PlvTjfO6O2vvhJqx/Yek4ypsDuJeCfpy6jsEruq4V1PYA0Z6WwgmbLlQD0f7xq+kSjE3WA==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
@@ -487,7 +487,7 @@ packages:
       zod: ^4.6.7
 
   '@nearpay-internal/testing@0.1.2':
-    resolution: {integrity: sha512-QelmW3DAGgeg6N8Q0AV+Ae+7JucHNC8d6NmsZJs/pDjIrdvrtFpV+s2Y3UOUvFieI42b5IhANlqgCeFULYKZmw==}
+    resolution: {integrity: sha512-cwn35vSpjrU4Yzy7Qyp/DqkaMgopwf/wxnoJgQi09k2AnegX/bvlJ7ENdekyT59gkfDGc/v2cnkO7tvMErrovg==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
