@@ -59,7 +59,7 @@ describe("sentinel registry view", () => {
   afterAll(async () => {
     await s?.stop();
   });
-  it("exposes active destinations with the merchant name and KYB flag only", async () => {
+  it("exposes the merchant name, KYB flag, verification and disabled_at only", async () => {
     const cols = await sql<{ column_name: string }>`
       select column_name from information_schema.columns where table_name = 'sentinel_destination_registry' order by ordinal_position`.execute(
       s.admin.db,
@@ -76,6 +76,42 @@ describe("sentinel registry view", () => {
       "active_at",
       "merchant_name",
       "kyb_verified",
+      "verification",
+      "disabled_at",
+    ]);
+  });
+  it("lists active destinations and once-active disabled ones, never pending ones", async () => {
+    const acct = "01900000-0000-7000-8000-0000000a0c01";
+    await sql`insert into accounts (id, display_name, verified_legal_name, fee_schedule_id, api_version, settings)
+      values (${acct}, 'Acme', 'Acme GmbH', '01900000-0000-7000-8000-000000000001', '2026-11-01', '{}')`.execute(
+      s.admin.db,
+    );
+    const row = (id: string, status: string, activeAt: string | null, disabledAt: string | null) =>
+      sql`insert into settlement_destinations (id, account_id, livemode, asset_id, type, chain, address, address_norm, label,
+            status, verification, active_at, created_by, disabled_at, disabled_reason)
+          values (${id}, ${acct}, false, 'nep141:usdc.near', 'chain_address', 'near:mainnet', ${`d${id.slice(-4)}.near`}, ${`d${id.slice(-4)}.near`},
+            'x', ${status}, 'test', ${activeAt}, ${acct}, ${disabledAt}, ${disabledAt ? "merchant" : null})`.execute(
+        s.admin.db,
+      );
+    await row("01900000-0000-7000-8000-0000000d0001", "active", "2026-11-01T00:00:00Z", null);
+    await row("01900000-0000-7000-8000-0000000d0002", "disabled", "2026-11-01T00:00:00Z", "2026-11-02T00:00:00Z");
+    await row("01900000-0000-7000-8000-0000000d0003", "disabled", null, "2026-11-02T00:00:00Z");
+    await row("01900000-0000-7000-8000-0000000d0004", "pending_verification", null, null);
+    const got = await sql<{
+      id: string;
+      status: string;
+      merchant_name: string;
+      kyb_verified: boolean;
+      disabled_at: Date | null;
+    }>`
+      select id, status, merchant_name, kyb_verified, disabled_at from sentinel_destination_registry where account_id = ${acct} order by id`.execute(
+      s.admin.db,
+    );
+    expect(
+      got.rows.map((r) => [r.id.slice(-1), r.status, r.merchant_name, r.kyb_verified, r.disabled_at !== null]),
+    ).toEqual([
+      ["1", "active", "Acme GmbH", true, false],
+      ["2", "disabled", "Acme GmbH", true, true],
     ]);
   });
   it("the audit log is append-only even for the app role", async () => {
