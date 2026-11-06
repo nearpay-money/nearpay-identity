@@ -11,12 +11,14 @@ Scope: Accounts, users, roles, passkey sessions, API keys, settlement destinatio
 
 ## Rules for this repo
 
-- Hexagonal layout: `src/domain` is pure (no I/O); `src/app` holds use cases; `src/infra` adapts DB, HTTP clients and NATS; `src/api` maps spec-generated routes to use cases.
-- Every state change writes the aggregate row, a transition row and an outbox row in ONE transaction.
-- Every public POST honours `Idempotency-Key` inside the same transaction as the side effect.
-- Every query filters by `account_id` AND `livemode` (INV-8).
-- Money is bigint base units + asset/currency (`@nearpay-internal/money`). No floats.
-- Consumers dedupe by event ID (inbox table) and ignore stale `aggregate_version`.
+- Hexagonal layout: `src/domain` is pure; `src/app` holds use cases; `src/infra` adapts Postgres, Valkey, NATS, peers, RPC and crypto; `src/api` maps spec routes to use cases.
+- Every state change writes the aggregate row, its transition/audit row and the outbox event in ONE transaction; consumers run in the inbox transaction and apply compliance events in aggregate-version order.
+- Destinations can never be changed by API keys (INV-1 practical); every destination change needs a stepped-up owner/admin session.
+- Fail closed: screening unavailable → no new destination; RPC unavailable → no attestation; a missing JWT key file → no start.
+- Never log or store secrets in clear: keys, session/registration/magic-link tokens are SHA-256 only; CSRF copies and IPs are envelope-encrypted; emails are never logged.
+- Authz is hot (p99 ≤ 5 ms cached): no network call on the cached path except Valkey; anything new there needs a cache and a fallback.
+- The audit log is append-only (a trigger enforces it); sensitive actions write it.
+- Keep ≥ 90% branch coverage on `src/domain`; attestation changes need vectors.
 
 ## Never
 
