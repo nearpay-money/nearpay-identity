@@ -1,4 +1,5 @@
 /** Sign-up, passkeys, sessions, step-up and logout through the gateway (lld/identity.md §6, §12). */
+import { DashboardSession } from "@nearpay/spec";
 import { sql } from "@nearpay-internal/db";
 import { toUuid } from "@nearpay-internal/ids";
 import { sendMessage } from "@nearpay-internal/spec";
@@ -256,6 +257,112 @@ describe("sign-in, step-up, logout", () => {
     await new Promise((x) => setTimeout(x, 10));
     s.identity.cache.local<object>("sessions", 10_000).clear();
     expect((await s.gateway("GET", "/v1/account", { cookie: u.cookie })).status).toBe(401);
+  });
+});
+
+describe("GET /v1/auth/session (getDashboardSession)", () => {
+  let u: User;
+  beforeAll(async () => {
+    u = await signUp(s, "reload@shop.test", "Reload Shop");
+  });
+  const clearSessionCache = () => s.identity.cache.local<object>("sessions", 10_000).clear();
+  const tokenFor = async (cookie: string) => {
+    const r = await s.direct("GET", "/internal/authz", {
+      headers: {
+        "x-forwarded-method": "GET",
+        "x-forwarded-uri": "/v1/auth/session",
+        "x-forwarded-host": "dashboard.nearpay.localhost",
+        "x-forwarded-for": "192.0.2.10",
+        cookie,
+      },
+    });
+    expect(r.status).toBe(200);
+    return r.headers["x-nearpay-token"] as string;
+  };
+
+  it("returns the current DashboardSession with the same CSRF token (re-issued from csrf_enc), setting no cookie", async () => {
+    const r = await s.gateway("GET", "/v1/auth/session", { cookie: u.cookie });
+    expect(r.status).toBe(200);
+    expect(DashboardSession.safeParse(r.body).success).toBe(true);
+    expect(r.body).toMatchObject({
+      object: "dashboard_session",
+      user: { id: u.userId, email: "reload@shop.test" },
+      account: { id: u.accountId, display_name: "Reload Shop" },
+      role: "owner",
+      csrf_token: u.csrf,
+    });
+    expect(r.headers["set-cookie"]).toBeUndefined();
+    const row = await s.admin.db
+      .selectFrom("sessions")
+      .selectAll()
+      .where("user_id", "=", toUuid(u.userId, "usr"))
+      .executeTakeFirstOrThrow();
+    expect(r.body.expires_at).toBe(Math.floor(row.expires_at.getTime() / 1000));
+    // the stored token is only encrypted and hashed, never in clear
+    expect(row.csrf_enc.toString("latin1")).not.toContain(u.csrf);
+    // a reloaded dashboard uses the recovered token for unsafe calls; the cookie and CSRF do not change
+    const again = await s.gateway("GET", "/v1/auth/session", { cookie: u.cookie, mode: "live" });
+    expect(again.body.csrf_token).toBe(u.csrf);
+    const patch = await s.gateway("PATCH", "/v1/account", {
+      cookie: u.cookie,
+      csrf: r.body.csrf_token,
+      body: { display_name: "Reload Shop" },
+    });
+    expect(patch.status).toBe(200);
+  });
+
+  it("any role may read it; the role is the membership's", async () => {
+    for (const role of ["admin", "developer", "viewer"] as const) {
+      await s.admin.db
+        .updateTable("memberships")
+        .set({ role })
+        .where("user_id", "=", toUuid(u.userId, "usr"))
+        .execute();
+      clearSessionCache();
+      const r = await s.gateway("GET", "/v1/auth/session", { cookie: u.cookie });
+      expect(r.status, role).toBe(200);
+      expect(r.body.role).toBe(role);
+    }
+    await s.admin.db
+      .updateTable("memberships")
+      .set({ role: "owner" })
+      .where("user_id", "=", toUuid(u.userId, "usr"))
+      .execute();
+    clearSessionCache();
+  });
+
+  it("needs a session: no cookie → 401, an API key → 403", async () => {
+    const none = await s.gateway("GET", "/v1/auth/session", {});
+    expect(none.status).toBe(401);
+    expect(none.body).toMatchObject({ error: { code: "authentication_required" } });
+    const k = await s.gateway("POST", "/v1/api_keys", as(u, "test", { type: "secret", livemode: false, name: "k" }));
+    expect(k.status).toBe(201);
+    const key = await s.gateway("GET", "/v1/auth/session", { bearer: k.body.secret });
+    expect(key.status).toBe(403);
+    expect(key.body).toMatchObject({ error: { code: "permission_denied" } });
+  });
+
+  it("checks the cookie itself: another user's cookie, a revoked or idle session → 401", async () => {
+    const other = await signUp(s, "other-reload@shop.test", "Other Shop");
+    const token = await tokenFor(u.cookie);
+    const call = (cookie: string | undefined, t = token) =>
+      s.direct("GET", "/v1/auth/session", { token: t, headers: cookie ? { cookie } : {} });
+    expect((await call(u.cookie)).status).toBe(200);
+    expect((await call(undefined)).status).toBe(401);
+    expect((await call(other.cookie)).body).toMatchObject({ error: { code: "authentication_required" } });
+    // idle for more than 12 h (the request token is still valid for its short TTL)
+    const otherToken = await tokenFor(other.cookie);
+    await s.admin.db
+      .updateTable("sessions")
+      .set({ last_seen_at: new Date(Date.now() - 13 * 3_600_000) })
+      .where("user_id", "=", toUuid(other.userId, "usr"))
+      .execute();
+    expect((await call(other.cookie, otherToken)).status).toBe(401);
+    // revoked by logout
+    expect((await s.gateway("POST", "/v1/auth/logout", as(u, "test", {}))).status).toBe(204);
+    expect((await call(u.cookie)).status).toBe(401);
+    clearSessionCache();
+    expect((await s.gateway("GET", "/v1/auth/session", { cookie: u.cookie })).status).toBe(401);
   });
 });
 

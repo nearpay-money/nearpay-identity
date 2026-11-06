@@ -8,6 +8,7 @@ import {
   disableSettlementDestination,
   getAccount,
   getAccountRequirements,
+  getDashboardSession,
   getSettlementDestination,
   listApiKeys,
   listSettlementDestinations,
@@ -117,6 +118,7 @@ export function identityRoutes(id: Identity, deps: RouteDeps): RouteBinding[] {
     implement(stepUpVerify, async (ctx) =>
       auth.stepUpVerify(id, principal(ctx), ctx.body.credential as never, meta(id, ctx)),
     ),
+    implement(getDashboardSession, async (ctx) => auth.getDashboardSession(id, principal(ctx), meta(id, ctx))),
     implement(logout, async (ctx) => {
       const r = await auth.logout(id, principal(ctx), meta(id, ctx));
       return r as never;
