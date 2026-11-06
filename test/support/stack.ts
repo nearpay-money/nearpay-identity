@@ -58,6 +58,8 @@ export interface GatewayRequest {
   body?: unknown;
   ip?: string;
   host?: string;
+  /** Extra request headers passed to the service after authz (e.g. `idempotency-key`). */
+  headers?: Record<string, string>;
 }
 
 export interface Response {
@@ -305,6 +307,7 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
         host: r.host ?? "dashboard.nearpay.localhost",
         "x-forwarded-for": ip,
         ...(r.cookie ? { cookie: r.cookie } : {}),
+        ...r.headers,
       };
       return inject(method, path, headers, r.body);
     },

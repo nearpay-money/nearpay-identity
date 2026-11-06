@@ -5,7 +5,16 @@
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { PUBLIC_ROUTES } from "@nearpay/spec";
+import {
+  challengeSettlementDestination,
+  createSettlementDestination,
+  DashboardSession,
+  ERRORS,
+  getDashboardSession,
+  PUBLIC_ROUTES,
+  SettlementDestination,
+  SPEC_VERSION,
+} from "@nearpay/spec";
 import { unhandledSubjects } from "@nearpay-internal/bus";
 import { sql } from "@nearpay-internal/db";
 import { unimplementedRoutes } from "@nearpay-internal/service";
@@ -26,6 +35,33 @@ describe("routes and events", () => {
         .map((r) => r.id)
         .sort(),
     );
+  });
+
+  it("is built against spec 0.1.5: the session read and the challenge re-issue, as the spec defines them", () => {
+    expect(SPEC_VERSION).toBe("0.1.5");
+    const bound = identityRoutes({} as never, { touches: {} as never, serviceClients: new Map() }).map(
+      (b) => b.route.id,
+    );
+    expect(bound).toEqual(expect.arrayContaining(["getDashboardSession", "challengeSettlementDestination"]));
+    // session auth, any role, read-only; the response is the sign-in DashboardSession
+    expect(getDashboardSession).toMatchObject({ method: "GET", path: "/v1/auth/session", auth: ["session"] });
+    expect(getDashboardSession).not.toHaveProperty("roles");
+    expect(getDashboardSession).not.toHaveProperty("stepUp");
+    expect(getDashboardSession.response).toBe(DashboardSession);
+    // the same access as creating a destination: stepped-up owner/admin session, idempotent
+    expect(challengeSettlementDestination).toMatchObject({
+      method: "POST",
+      path: "/v1/settlement_destinations/{id}/challenge",
+      auth: ["session"],
+      roles: ["owner", "admin"],
+      stepUp: true,
+      idempotent: true,
+      errors: ["state_conflict"],
+    });
+    expect(challengeSettlementDestination.auth).toEqual(createSettlementDestination.auth);
+    expect(challengeSettlementDestination.roles).toEqual(createSettlementDestination.roles);
+    expect(challengeSettlementDestination.response).toBe(SettlementDestination);
+    expect(ERRORS.challenge_expired.message).toMatch(/request a new challenge for the destination/);
   });
 
   it("handles every subject the catalogue routes to identity", () => {
@@ -113,6 +149,12 @@ describe("sentinel registry view", () => {
       ["1", "active", "Acme GmbH", true, false],
       ["2", "disabled", "Acme GmbH", true, true],
     ]);
+  });
+  it("attestation challenges can be superseded (migration 0003)", async () => {
+    const cols = await sql<{ column_name: string; is_nullable: string }>`
+      select column_name, is_nullable from information_schema.columns
+      where table_name = 'attestation_challenges' and column_name = 'superseded_at'`.execute(s.admin.db);
+    expect(cols.rows).toEqual([{ column_name: "superseded_at", is_nullable: "YES" }]);
   });
   it("the audit log is append-only even for the app role", async () => {
     await s.admin.db

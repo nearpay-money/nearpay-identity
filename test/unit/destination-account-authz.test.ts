@@ -35,6 +35,8 @@ describe("destination state machine", () => {
     expect(transition("pending_approval", "approve")).toEqual({ ok: true, to: "cooling_off" });
     expect(transition("cooling_off", "activate")).toEqual({ ok: true, to: "active" });
     expect(transition("active", "set_default")).toEqual({ ok: true, to: "active" });
+    // a re-issued challenge keeps the destination waiting for its signature
+    expect(transition("pending_verification", "challenge")).toEqual({ ok: true, to: "pending_verification" });
     for (const from of ["pending_verification", "pending_approval", "cooling_off", "active"] as const)
       expect(transition(from, "disable")).toEqual({ ok: true, to: "disabled" });
   });
@@ -45,6 +47,8 @@ describe("destination state machine", () => {
     expect(transition("active", "activate")).toEqual({ ok: false, state: "active" });
     expect(transition("disabled", "disable")).toEqual({ ok: false, state: "disabled" });
     expect(transition("cooling_off", "set_default")).toEqual({ ok: false, state: "cooling_off" });
+    for (const from of ["pending_approval", "cooling_off", "active", "disabled"] as const)
+      expect(transition(from, "challenge")).toEqual({ ok: false, state: from });
   });
   it("approvals: 2 only with the two-approver rule and ≥ 2 owners/admins", () => {
     expect(approvalsRequired(1, true)).toBe(1);

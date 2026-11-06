@@ -29,6 +29,7 @@ import {
   readCookie,
   SESSION_COOKIE,
   STEP_UP_MS,
+  sessionState,
   setCookie,
   sha256,
 } from "../domain/session/session.js";
@@ -173,15 +174,17 @@ async function createSession(
   return { token, csrf, expiresAt };
 }
 
-async function sessionBody(tx: Tx, userId: string, accountId: string, s: NewSession) {
-  const row = await tx
+async function sessionBody(db: Identity["db"] | Tx, userId: string, accountId: string, s: NewSession) {
+  const row = await db
     .selectFrom("memberships")
     .innerJoin("users", "users.id", "memberships.user_id")
     .innerJoin("accounts", "accounts.id", "memberships.account_id")
     .select(["users.email", "accounts.display_name", "memberships.role"])
     .where("memberships.user_id", "=", userId)
     .where("memberships.account_id", "=", accountId)
-    .executeTakeFirstOrThrow();
+    .executeTakeFirst();
+  // a membership removed after sign-in ends the session's access (authz denies it as well)
+  if (!row) throw new ApiError("authentication_required");
   return {
     object: "dashboard_session" as const,
     user: { id: fromUuid("usr", userId), email: row.email },
@@ -202,6 +205,29 @@ export async function currentSession(id: Identity, meta: RequestMeta, userUuid: 
   const s = await id.db.selectFrom("sessions").selectAll().where("token_hash", "=", sha256(token)).executeTakeFirst();
   if (!s || s.user_id !== userUuid || s.revoked_at) throw new ApiError("authentication_required");
   return s;
+}
+
+/**
+ * `GET /v1/auth/session` (spec 0.1.5, CR-15-01): the caller's dashboard session, so a reload or a new
+ * tab recovers it without client storage. The CSRF token is the session's own, re-issued from its
+ * encrypted copy (`csrf_enc`), never rotated; no cookie is set (authz already slid the TTL). The cookie
+ * must name a valid dashboard session of the same user and account as the request token; anything else
+ * (ops session, revoked/expired/idle, missing membership) is `401 authentication_required`.
+ */
+export async function getDashboardSession(id: Identity, principal: { sub: string; acct: string }, meta: RequestMeta) {
+  const token = readCookie(meta.cookie, SESSION_COOKIE);
+  if (!token) throw new ApiError("authentication_required");
+  const s = await id.db.selectFrom("sessions").selectAll().where("token_hash", "=", sha256(token)).executeTakeFirst();
+  if (
+    s?.kind !== "dashboard" ||
+    s.account_id === null ||
+    s.user_id !== toUuid(principal.sub, "usr") ||
+    s.account_id !== toUuid(principal.acct, "acct") ||
+    sessionState(s, id.now()) !== "valid"
+  )
+    throw new ApiError("authentication_required");
+  const csrf = id.cipher.decrypt(s.csrf_enc, `session:${s.id}:csrf`).toString("utf8");
+  return sessionBody(id.db, s.user_id, s.account_id, { token: "", csrf, expiresAt: s.expires_at });
 }
 
 // ---------------------------------------------------------------------------------------------

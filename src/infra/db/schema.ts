@@ -228,6 +228,8 @@ export interface AttestationChallengesTable {
   nonce: Buffer;
   expires_at: Timestamp;
   used_at: NullableTimestamp;
+  /** Set when a newer challenge was issued for the destination (migration 0003); no longer accepted. */
+  superseded_at: NullableTimestamp;
   created_at: Timestamp;
 }
 
