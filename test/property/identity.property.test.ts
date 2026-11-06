@@ -9,7 +9,7 @@ import {
 } from "../../src/domain/settlement-destination/destination.js";
 
 describe("destination lifecycle properties", () => {
-  const command = fc.constantFrom<Command>("attest", "approve", "activate", "disable", "set_default");
+  const command = fc.constantFrom<Command>("challenge", "attest", "approve", "activate", "disable", "set_default");
   it("a destination is active only via attestation and cool-off; disabled is terminal", () => {
     fc.assert(
       fc.property(fc.array(command, { maxLength: 30 }), fc.integer({ min: 1, max: 2 }), (cmds, approvals) => {
@@ -23,6 +23,7 @@ describe("destination lifecycle properties", () => {
             continue;
           }
           if (s === "disabled") throw new Error("left disabled");
+          if (c === "challenge") expect([s, r.to]).toEqual(["pending_verification", "pending_verification"]);
           if (c === "attest") attested = true;
           if (r.to === "cooling_off") cooled = true;
           s = r.to;

@@ -5,6 +5,7 @@
  * |----------------------|--------------------|------------------------------------------|---------------------------------|
  * | —                    | create (test mode) | screening allow                          | active (verification `test`)    |
  * | —                    | create (live)      | screening allow, unique, no recovery lock | pending_verification            |
+ * | pending_verification | challenge          | earlier unused challenges superseded     | pending_verification (fresh challenge) |
  * | pending_verification | attest             | signature valid, challenge fresh         | cooling_off (1 approver, Stage 1) / pending_approval (2) |
  * | pending_approval     | approve            | distinct approvers ≥ required            | cooling_off                     |
  * | cooling_off          | activate (job)     | not disabled, re-screen allow            | active                          |
@@ -12,7 +13,7 @@
  */
 
 export type DestinationStatus = "pending_verification" | "pending_approval" | "cooling_off" | "active" | "disabled";
-export type Command = "attest" | "approve" | "activate" | "disable" | "set_default";
+export type Command = "challenge" | "attest" | "approve" | "activate" | "disable" | "set_default";
 
 export type Step =
   | { readonly ok: true; readonly to: DestinationStatus }
@@ -21,6 +22,8 @@ export type Step =
 /** Where `command` moves a destination in `from` (approvals: how many are required after the attestation). */
 export function transition(from: DestinationStatus, command: Command, o: { approvalsRequired?: number } = {}): Step {
   switch (command) {
+    case "challenge":
+      return from === "pending_verification" ? { ok: true, to: from } : { ok: false, state: from };
     case "attest":
       return from === "pending_verification"
         ? { ok: true, to: (o.approvalsRequired ?? 1) > 1 ? "pending_approval" : "cooling_off" }

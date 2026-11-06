@@ -19,6 +19,7 @@ import {
   attestationMessage,
   CHALLENGE_TTL_MS,
   NEP413_RECIPIENT,
+  type SigningStandard,
   STAGE1_STANDARDS,
   signingStandard,
   transition,
@@ -387,35 +388,86 @@ export async function createDestination(
       return destinationView(active, { isDefault: isDefaultIn(defs, active), minUsdMicros: null });
     }
 
-    const nonce = randomBytes(32);
-    // whole seconds: the signed message and `expires_at` (unix seconds) state the same instant
-    const expiresAt = new Date(Math.floor(((await dbNow(tx)).getTime() + CHALLENGE_TTL_MS) / 1000) * 1000);
-    const message = attestationMessage({
-      account: accountId,
-      livemode,
-      assetId: b.asset_id,
-      chain: b.chain,
-      address: b.address,
-      nonceHex: nonce.toString("hex"),
-      expiresAt,
-    });
-    const challengeId = uuidv7();
-    await tx
-      .insertInto("attestation_challenges")
-      .values({ id: challengeId, destination_id: created.id, standard, message, nonce, expires_at: expiresAt })
-      .execute();
     return destinationView(created, {
       isDefault: false,
       minUsdMicros: null,
-      challenge: {
-        id: fromUuid("chl", challengeId),
-        message,
-        signing_standard: standard,
-        nonce: standard === "nep413" ? nonce.toString("base64") : null,
-        recipient: standard === "nep413" ? NEP413_RECIPIENT : null,
-        expires_at: Math.floor(expiresAt.getTime() / 1000),
-      },
+      challenge: await issueChallenge(tx, accountId, created, standard),
     });
+  });
+}
+
+/**
+ * A fresh attestation challenge for a live destination (10 minutes, single use): a random nonce and
+ * the §8.2 message, stored with the signing standard. Returned in the spec's `AttestationChallenge`
+ * shape (create and `…/challenge` answer the same way).
+ */
+async function issueChallenge(tx: Tx, accountId: string, d: DestinationRow, standard: SigningStandard) {
+  const nonce = randomBytes(32);
+  // whole seconds: the signed message and `expires_at` (unix seconds) state the same instant
+  const expiresAt = new Date(Math.floor(((await dbNow(tx)).getTime() + CHALLENGE_TTL_MS) / 1000) * 1000);
+  const message = attestationMessage({
+    account: accountId,
+    livemode: d.livemode,
+    assetId: d.asset_id,
+    chain: d.chain,
+    address: d.address,
+    nonceHex: nonce.toString("hex"),
+    expiresAt,
+  });
+  const challengeId = uuidv7();
+  await tx
+    .insertInto("attestation_challenges")
+    .values({ id: challengeId, destination_id: d.id, standard, message, nonce, expires_at: expiresAt })
+    .execute();
+  return {
+    id: fromUuid("chl", challengeId),
+    message,
+    signing_standard: standard,
+    nonce: standard === "nep413" ? nonce.toString("base64") : null,
+    recipient: standard === "nep413" ? NEP413_RECIPIENT : null,
+    expires_at: Math.floor(expiresAt.getTime() / 1000),
+  };
+}
+
+/**
+ * `POST /v1/settlement_destinations/{id}/challenge` (spec 0.1.5, CR-15-03): a new attestation
+ * challenge for a destination still in `pending_verification` (its earlier challenge expired or was
+ * lost), instead of disabling and re-adding it. Earlier unused challenges are superseded in the same
+ * transaction and stop being accepted by `…/attest`. Any other status → `409 state_conflict`. The
+ * route itself requires a stepped-up owner/admin session (spec, enforced by the bootstrap) and is
+ * idempotent on `Idempotency-Key` (a replay returns the same challenge without superseding it).
+ */
+export async function challengeDestination(
+  id: Identity,
+  accountId: string,
+  livemode: boolean,
+  destinationId: string,
+  actor: Actor,
+) {
+  return withTx(id.db, async (tx) => {
+    const d = await loadOwn(tx, accountId, livemode, destinationId, true);
+    if (!transition(d.status, "challenge").ok)
+      throw new ApiError("state_conflict", { params: { object: "settlement_destination", state: d.status } });
+    const info = getChain(d.chain);
+    if (!info) throw new Error(`destination ${destinationId} is on an unsupported chain ${d.chain}`);
+    const standard = signingStandard(d.type, info.family, d.address_norm);
+    const now = await dbNow(tx);
+    const superseded = await tx
+      .updateTable("attestation_challenges")
+      .set({ superseded_at: now })
+      .where("destination_id", "=", d.id)
+      .where("used_at", "is", null)
+      .where("superseded_at", "is", null)
+      .executeTakeFirst();
+    const challenge = await issueChallenge(tx, accountId, d, standard);
+    await audit(id, tx, {
+      accountUuid: d.account_id,
+      actor,
+      action: "destination.challenge_issued",
+      target: { type: "settlement_destination", id: destinationId },
+      details: { challenge: challenge.id, superseded: Number(superseded.numUpdatedRows) },
+    });
+    return destinationView(d, { isDefault: false, minUsdMicros: null, challenge });
   });
 }
 
@@ -437,7 +489,7 @@ export async function attestDestination(
     .where("id", "=", toUuid(b.challenge_id, "chl"))
     .where("destination_id", "=", d0.id)
     .executeTakeFirst();
-  if (!c || c.used_at || c.expires_at.getTime() <= id.now()) throw new ApiError("challenge_expired");
+  if (!c || c.used_at || c.superseded_at || c.expires_at.getTime() <= id.now()) throw new ApiError("challenge_expired");
   if (c.standard !== b.standard) {
     id.metrics.attestationFailure(b.standard);
     throw new ApiError("attestation_invalid", { message: `This destination signs with ${c.standard}.` });
@@ -481,6 +533,8 @@ export async function attestDestination(
       .set({ used_at: await dbNow(tx) })
       .where("id", "=", c.id)
       .where("used_at", "is", null)
+      // a challenge superseded while its signature was being checked is no longer accepted
+      .where("superseded_at", "is", null)
       .executeTakeFirst();
     if (Number(used.numUpdatedRows) !== 1) throw new ApiError("challenge_expired");
     const now = await dbNow(tx);

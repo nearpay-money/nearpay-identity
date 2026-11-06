@@ -4,6 +4,7 @@
  * and the compliance consumers.
  */
 import { connect } from "@nats-io/transport-node";
+import { SettlementDestination } from "@nearpay/spec";
 import { sql } from "@nearpay-internal/db";
 import { newId, toUuid } from "@nearpay-internal/ids";
 import { createScreening, getInternalAsset, listChainProfiles } from "@nearpay-internal/spec";
@@ -405,6 +406,201 @@ describe("live mode", () => {
     );
     await new Promise((r) => setTimeout(r, 500));
     expect((await s.gateway("GET", "/v1/account", { cookie: u.cookie })).body.kyb_status).toBe("approved");
+  });
+});
+
+describe("re-issued attestation challenges (POST /v1/settlement_destinations/{id}/challenge)", () => {
+  const challenge = (id: string, o: { who?: User; mode?: "test" | "live"; key?: string } = {}) =>
+    s.gateway("POST", `/v1/settlement_destinations/${id}/challenge`, {
+      ...as(o.who ?? u, o.mode ?? "live", {}),
+      ...(o.key ? { headers: { "idempotency-key": o.key } } : {}),
+    });
+  const attest = (id: string, near: ReturnType<typeof nearSigner>, c: { id: string; message: string; nonce: string }) =>
+    s.gateway(
+      "POST",
+      `/v1/settlement_destinations/${id}/attest`,
+      as(u, "live", {
+        challenge_id: c.id,
+        standard: "nep413",
+        signature: near.sign(c.message, Buffer.from(c.nonce, "base64")),
+        public_key: near.publicKey,
+      }),
+    );
+  const setRole = async (role: "owner" | "admin" | "developer" | "viewer") => {
+    await s.admin.db.updateTable("memberships").set({ role }).where("user_id", "=", toUuid(u.userId, "usr")).execute();
+    s.identity.cache.local<object>("sessions", 10_000).clear();
+  };
+
+  it("issues a fresh challenge (same shape as on create); earlier unused ones stop being accepted", async () => {
+    const near = nearSigner();
+    const r = await create(
+      { asset_id: USDC_NEAR, type: "intents_account", chain: "near:mainnet", address: near.implicitAccount },
+      "live",
+    );
+    const c1 = r.body.attestation_challenge;
+    const k1 = `chl-${r.body.id}`;
+    const r2 = await challenge(r.body.id, { key: k1 });
+    expect(r2.status).toBe(200);
+    expect(SettlementDestination.safeParse(r2.body).success).toBe(true);
+    const { attestation_challenge: c2, ...dest2 } = r2.body;
+    const { attestation_challenge: _c1, ...dest1 } = r.body;
+    expect(dest2).toEqual(dest1); // the destination itself is unchanged
+    expect(Object.keys(c2).sort()).toEqual(Object.keys(c1).sort());
+    expect(c2).toMatchObject({ signing_standard: "nep413", recipient: "nearpay.money" });
+    expect(c2.id).toMatch(/^chl_/);
+    expect(c2.id).not.toBe(c1.id);
+    expect(c2.nonce).not.toBe(c1.nonce);
+    expect(c2.expires_at).toBeGreaterThanOrEqual(c1.expires_at);
+    expect(c2.expires_at - Math.floor(Date.now() / 1000)).toBeGreaterThan(9 * 60);
+    expect(c2.message).toBe(
+      [
+        "NearPay settlement destination",
+        `Account: ${u.accountId}`,
+        "Mode: live",
+        `Asset: ${USDC_NEAR}`,
+        "Network: near:mainnet",
+        `Address: ${near.implicitAccount}`,
+        `Nonce: ${Buffer.from(c2.nonce, "base64").toString("hex")}`,
+        `Expires: ${new Date(c2.expires_at * 1000).toISOString()}`,
+      ].join("\n"),
+    );
+    // an idempotent replay returns the same challenge and supersedes nothing
+    const replay = await challenge(r.body.id, { key: k1 });
+    expect(replay.status).toBe(200);
+    expect(replay.headers["idempotent-replayed"]).toBe("true");
+    expect(replay.body).toEqual(r2.body);
+    const rows = async () =>
+      s.admin.db
+        .selectFrom("attestation_challenges")
+        .select(["id", "used_at", "superseded_at"])
+        .where("destination_id", "=", toUuid(r.body.id, "sd"))
+        .orderBy("created_at")
+        .execute();
+    expect((await rows()).map((x) => x.superseded_at === null)).toEqual([false, true]);
+    // a new key issues a third challenge; the first two are no longer accepted
+    const r3 = await challenge(r.body.id, { key: `${k1}-2` });
+    const c3 = r3.body.attestation_challenge;
+    expect(c3.id).not.toBe(c2.id);
+    for (const old of [c1, c2]) {
+      const late = await attest(r.body.id, near, old);
+      expect(late.status).toBe(410);
+      expect(late.body.error).toMatchObject({
+        code: "challenge_expired",
+        message: "The attestation challenge has expired or was used; request a new challenge for the destination.",
+      });
+    }
+    const ok = await attest(r.body.id, near, c3);
+    expect(ok.status).toBe(200);
+    expect(ok.body.status).toBe("cooling_off");
+    const after = await rows();
+    expect(after.map((x) => [x.used_at !== null, x.superseded_at !== null])).toEqual([
+      [false, true],
+      [false, true],
+      [true, false],
+    ]);
+    // no state change → no outbox event; each issue is audited
+    expect((await outbox(r.body.id)).slice(0, 2)).toEqual(["created", "cooling_off"]);
+    const audits = await s.admin.db
+      .selectFrom("audit_events")
+      .selectAll()
+      .where("action", "=", "destination.challenge_issued")
+      .where("target_id", "=", r.body.id)
+      .execute();
+    expect(audits).toHaveLength(2);
+    // once attested, a challenge is a state conflict
+    const conflict = await challenge(r.body.id);
+    expect(conflict.status).toBe(409);
+    expect(conflict.body.error).toMatchObject({ code: "state_conflict" });
+  });
+
+  it("EIP-191 challenges have no nonce/recipient; only pending_verification destinations get one", async () => {
+    const evm = evmSigner();
+    const r = await create(
+      { asset_id: USDC_BASE, type: "chain_address", chain: "eip155:8453", address: evm.address },
+      "live",
+    );
+    const c = (await challenge(r.body.id)).body.attestation_challenge;
+    expect(c).toMatchObject({ signing_standard: "eip191", nonce: null, recipient: null });
+    const ok = await s.gateway(
+      "POST",
+      `/v1/settlement_destinations/${r.body.id}/attest`,
+      as(u, "live", { challenge_id: c.id, standard: "eip191", signature: evm.sign(c.message) }),
+    );
+    expect(ok.body.status).toBe("cooling_off");
+    // test-mode destinations are active at once; disabled ones are final
+    const t = await create({
+      asset_id: USDC_NEAR,
+      type: "intents_account",
+      chain: "near:mainnet",
+      address: nearSigner().implicitAccount,
+    });
+    expect(t.body.status).toBe("active");
+    const active = await challenge(t.body.id, { mode: "test" });
+    expect(active.status).toBe(409);
+    expect(active.body.error).toMatchObject({ code: "state_conflict" });
+    await s.gateway("POST", `/v1/settlement_destinations/${t.body.id}/disable`, as(u, "test", {}));
+    expect((await challenge(t.body.id, { mode: "test" })).status).toBe(409);
+  });
+
+  it("needs a stepped-up owner/admin session of the destination's account and mode", async () => {
+    const near = nearSigner();
+    const r = await create(
+      { asset_id: USDC_NEAR, type: "intents_account", chain: "near:mainnet", address: near.implicitAccount },
+      "live",
+    );
+    // other account, other mode, unknown id → 404
+    const other = await signUp(s, "chl-other@shop.test", "Other");
+    expect((await challenge(r.body.id, { who: other })).status).toBe(404);
+    expect((await challenge(r.body.id, { mode: "test" })).status).toBe(404);
+    expect((await challenge(newId("sd"))).status).toBe(404);
+    // no CSRF token → 403; an API key never → 403
+    const noCsrf = await s.gateway("POST", `/v1/settlement_destinations/${r.body.id}/challenge`, {
+      cookie: u.cookie,
+      mode: "live",
+      body: {},
+    });
+    expect(noCsrf.body).toMatchObject({ error: { code: "csrf_token_invalid" } });
+    const k = await s.gateway("POST", "/v1/api_keys", as(u, "test", { type: "secret", livemode: false, name: "chl" }));
+    const key = await s.gateway("POST", `/v1/settlement_destinations/${r.body.id}/challenge`, {
+      bearer: k.body.secret,
+      body: {},
+    });
+    expect(key.status).toBe(403);
+    // developer / viewer → 403; admin → 200
+    for (const role of ["developer", "viewer"] as const) {
+      await setRole(role);
+      const denied = await challenge(r.body.id);
+      expect(denied.status, role).toBe(403);
+      expect(denied.body.error.code).toBe("permission_denied");
+    }
+    await setRole("admin");
+    expect((await challenge(r.body.id)).status).toBe(200);
+    await setRole("owner");
+    // a step-up older than 10 minutes → 401 step_up_required, and nothing is superseded
+    const before = await s.admin.db
+      .selectFrom("attestation_challenges")
+      .select("id")
+      .where("destination_id", "=", toUuid(r.body.id, "sd"))
+      .where("superseded_at", "is", null)
+      .execute();
+    await s.admin.db
+      .updateTable("sessions")
+      .set({ step_up_at: new Date(Date.now() - 11 * 60_000) })
+      .where("user_id", "=", toUuid(u.userId, "usr"))
+      .execute();
+    s.identity.cache.local<object>("sessions", 10_000).clear();
+    const stale = await challenge(r.body.id);
+    expect(stale.status).toBe(401);
+    expect(stale.body.error.code).toBe("step_up_required");
+    const unchanged = await s.admin.db
+      .selectFrom("attestation_challenges")
+      .select("id")
+      .where("destination_id", "=", toUuid(r.body.id, "sd"))
+      .where("superseded_at", "is", null)
+      .execute();
+    expect(unchanged).toEqual(before);
+    await stepUp(s, u);
+    expect((await challenge(r.body.id)).status).toBe(200);
   });
 });
 

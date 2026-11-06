@@ -3,6 +3,7 @@
 import type { ServiceName } from "@nearpay/spec";
 import {
   attestSettlementDestination,
+  challengeSettlementDestination,
   createApiKey,
   createSettlementDestination,
   disableSettlementDestination,
@@ -46,6 +47,7 @@ import { authorize, type Touches } from "../app/authz.js";
 import type { Actor, Identity } from "../app/context.js";
 import {
   attestDestination,
+  challengeDestination,
   createDestination,
   disableDestination,
   getDestination,
@@ -167,6 +169,10 @@ export function identityRoutes(id: Identity, deps: RouteDeps): RouteBinding[] {
     implement(attestSettlementDestination, async (ctx) => {
       const p = principal(ctx);
       return attestDestination(id, p.acct, p.lm === true, ctx.params.id, ctx.body, actorOf(id, ctx));
+    }),
+    implement(challengeSettlementDestination, async (ctx) => {
+      const p = principal(ctx);
+      return challengeDestination(id, p.acct, p.lm === true, ctx.params.id, actorOf(id, ctx));
     }),
     implement(setDefaultSettlementDestination, async (ctx) => {
       const p = principal(ctx);
