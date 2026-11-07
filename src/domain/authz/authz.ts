@@ -3,6 +3,8 @@
  * public route table, credential precedence, CSRF, rate-limit classes, token buckets, client IP.
  */
 
+import { isDevEnv } from "../env.js";
+
 export interface RouteRef {
   readonly id: string;
   readonly method: string;
@@ -87,14 +89,15 @@ export function takeToken(
 }
 
 /**
- * Client IP (L-ID-07): `CF-Connecting-IP` on the server stage (Cloudflare-only origin); locally the
- * first `X-Forwarded-For` hop set by Traefik. Never trust either outside its stage.
+ * Client IP (L-ID-07): `CF-Connecting-IP` on the server stage (Cloudflare-only origin, and any NP_ENV
+ * other than local/test); locally the first `X-Forwarded-For` hop set by Traefik. Never trust either
+ * outside its stage.
  */
 export function clientIp(
   env: string,
   h: { cfConnectingIp?: string | undefined; xForwardedFor?: string | undefined },
 ): string | null {
-  const v = env === "server" ? h.cfConnectingIp : h.xForwardedFor?.split(",")[0];
+  const v = isDevEnv(env) ? h.xForwardedFor?.split(",")[0] : h.cfConnectingIp;
   const ip = v?.trim();
   return ip && /^[0-9a-fA-F:.]{2,45}$/.test(ip) ? ip : null;
 }

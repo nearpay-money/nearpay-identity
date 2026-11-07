@@ -34,6 +34,13 @@ describe("destination state machine", () => {
     });
     expect(transition("pending_approval", "approve")).toEqual({ ok: true, to: "cooling_off" });
     expect(transition("cooling_off", "activate")).toEqual({ ok: true, to: "active" });
+    // audit fix: activation re-checks approvals; pending destinations expire
+    expect(transition("cooling_off", "require_approval")).toEqual({ ok: true, to: "pending_approval" });
+    expect(transition("active", "require_approval")).toEqual({ ok: false, state: "active" });
+    for (const from of ["pending_verification", "pending_approval"] as const)
+      expect(transition(from, "expire")).toEqual({ ok: true, to: "disabled" });
+    for (const from of ["cooling_off", "active", "disabled"] as const)
+      expect(transition(from, "expire")).toEqual({ ok: false, state: from });
     expect(transition("active", "set_default")).toEqual({ ok: true, to: "active" });
     // a re-issued challenge keeps the destination waiting for its signature
     expect(transition("pending_verification", "challenge")).toEqual({ ok: true, to: "pending_verification" });
@@ -165,6 +172,9 @@ describe("gateway rules", () => {
     expect(clientIp("server", { cfConnectingIp: "1.2.3.4", xForwardedFor: "9.9.9.9" })).toBe("1.2.3.4");
     expect(clientIp("local", { cfConnectingIp: "1.2.3.4", xForwardedFor: "9.9.9.9, 10.0.0.1" })).toBe("9.9.9.9");
     expect(clientIp("local", {})).toBeNull();
+    // audit finding 2: X-Forwarded-For only for NP_ENV local/test; any other stage reads CF-Connecting-IP
+    expect(clientIp("staging", { cfConnectingIp: "1.2.3.4", xForwardedFor: "9.9.9.9" })).toBe("1.2.3.4");
+    expect(clientIp("test", { cfConnectingIp: "1.2.3.4", xForwardedFor: "9.9.9.9" })).toBe("9.9.9.9");
     expect(clientIp("local", { xForwardedFor: "<script>" })).toBeNull();
   });
   it("token buckets refill at the rate and cap at the burst", () => {

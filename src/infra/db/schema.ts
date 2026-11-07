@@ -105,6 +105,16 @@ export interface DestinationApprovalsTable {
   created_at: Timestamp;
 }
 
+/** Owner/admin role grants (migration 0005), written by the trigger on `memberships`. */
+export interface ManagerGrantsTable {
+  id: Generated<string>;
+  account_id: string;
+  user_id: string;
+  granted_at: Timestamp;
+  qualifies_at: Timestamp;
+  revoked_at: NullableTimestamp;
+}
+
 export interface PasskeysTable {
   id: string;
   user_id: string;
@@ -315,6 +325,7 @@ export interface IdentityTables {
   audit_events: AuditEventsTable;
   invitations: InvitationsTable;
   destination_approvals: DestinationApprovalsTable;
+  manager_grants: ManagerGrantsTable;
 }
 
 export type DB = IdentityTables & KitTables;

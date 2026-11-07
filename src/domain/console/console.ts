@@ -10,6 +10,8 @@
  *   self-asserted by the authenticator (anyone can build a software key claiming a YubiKey AAGUID).
  */
 
+import { isDevEnv } from "../env.js";
+
 export const FULL_ATTESTATION_FORMATS: readonly string[] = ["packed", "fido-u2f", "tpm"];
 
 export interface AuthenticatorFacts {
@@ -30,7 +32,7 @@ export function authenticatorProblem(f: AuthenticatorFacts): string | null {
   if (f.synced) return "synced passkeys are not accepted";
   if (f.allowlist.size === 0) return "no hardware keys are allow-listed";
   if (!f.allowlist.has(f.aaguid.toLowerCase())) return "this key model is not allow-listed";
-  const strict = f.env !== "local" && f.env !== "test";
+  const strict = !isDevEnv(f.env);
   if (strict && !(FULL_ATTESTATION_FORMATS.includes(f.fmt) && f.hasX5c)) return "the key gave no full attestation";
   if (strict && !f.rootsConfigured) return "no attestation trust anchors are configured";
   return null;

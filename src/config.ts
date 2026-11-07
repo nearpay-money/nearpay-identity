@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { baseConfigShape, list, loadConfig, secret, url } from "@nearpay-internal/service";
 import { z } from "zod";
 import type { ConsoleConfig } from "./app/context.js";
+import { isDevEnv } from "./domain/env.js";
 
 const shared = {
   ...baseConfigShape,
@@ -85,7 +86,7 @@ export type OpsConfig = z.output<z.ZodObject<typeof opsShape>>;
 
 /** A zero cool-off would let a stolen session redirect live funds at once: local stacks only. */
 export function checkCooloff(c: { env: string; cooloffSeconds: number }): void {
-  if (c.cooloffSeconds === 0 && c.env !== "local" && c.env !== "test")
+  if (c.cooloffSeconds === 0 && !isDevEnv(c.env))
     throw new Error("NP_COOLOFF_SECONDS=0 is allowed only when NP_ENV=local");
 }
 
@@ -106,7 +107,7 @@ export function parseAaguids(text: string, env: string): Set<string> {
     if (!line) continue;
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(line))
       throw new Error(`NP_OPS_AAGUID_ALLOWLIST: not an AAGUID: ${line.slice(0, 40)}`);
-    if (VIRTUAL_AAGUIDS.has(line) && env !== "local" && env !== "test") continue;
+    if (VIRTUAL_AAGUIDS.has(line) && !isDevEnv(env)) continue;
     out.add(line);
   }
   return out;

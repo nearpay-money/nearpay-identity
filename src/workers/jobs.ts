@@ -4,6 +4,7 @@
  * | kind                 | when                     | what                                                  |
  * |----------------------|--------------------------|-------------------------------------------------------|
  * | destination.activate | at `active_at` (per sd)  | re-screen, activate (or disable on block; retry when screening is down) |
+ * | destination.expire   | hourly (+20 min offset)  | disable live destinations still pending 7 days after creation |
  * | purge.auth           | hourly                   | expired magic links, registration tokens, challenges, sessions; marks invitations expired |
  * | kit.purge            | hourly                   | published outbox, old inbox, expired idempotency keys  |
  *
@@ -12,13 +13,14 @@
  */
 import { type JobHandler, purgeKitTables, type RecurringJob, sql } from "@nearpay-internal/db";
 import type { Identity } from "../app/context.js";
-import { ACTIVATE_JOB, activateDestination } from "../app/destinations.js";
+import { ACTIVATE_JOB, activateDestination, EXPIRE_JOB, expirePendingDestinations } from "../app/destinations.js";
 
 const HOUR = 3_600_000;
 
 export const RECURRING: readonly RecurringJob[] = [
   { kind: "purge.auth", everyMs: HOUR, offsetMs: 10 * 60_000 },
   { kind: "kit.purge", everyMs: HOUR },
+  { kind: EXPIRE_JOB, everyMs: HOUR, offsetMs: 20 * 60_000 },
 ];
 
 export async function purgeAuth(id: Identity) {
@@ -45,6 +47,9 @@ export function jobHandlers(id: Identity): Record<string, JobHandler> {
         { destination: (payload as { destination_id: string }).destination_id, result: r },
         "destination activation",
       );
+    },
+    [EXPIRE_JOB]: async () => {
+      id.log.info({ expired: await expirePendingDestinations(id) }, "pending destinations expired");
     },
     "purge.auth": async () => {
       id.log.info(await purgeAuth(id), "auth tables purged");

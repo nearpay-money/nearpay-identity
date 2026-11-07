@@ -1,8 +1,10 @@
 /**
  * Cloudflare Turnstile (sign-up, lld/identity.md §6). Cloudflare's documented test secrets behave
- * deterministically, so outside the server stage they are answered locally (no egress needed):
+ * deterministically, so they are answered locally only when NP_ENV is `local`/`test` (no egress needed):
  * `1x…AA` always passes, `2x…AA` always fails, `3x…AA` reports a spent token.
  */
+import { isDevEnv } from "../../domain/env.js";
+
 export type TurnstileVerifier = (token: string, ip: string | null) => Promise<boolean>;
 
 const TEST_SECRETS: Record<string, boolean> = {
@@ -18,7 +20,7 @@ export function turnstile(o: {
   timeoutMs?: number;
 }): TurnstileVerifier {
   const f = o.fetch ?? fetch;
-  if (o.env !== "server" && Object.hasOwn(TEST_SECRETS, o.secret)) {
+  if (isDevEnv(o.env) && Object.hasOwn(TEST_SECRETS, o.secret)) {
     const result = TEST_SECRETS[o.secret] as boolean;
     return async () => result;
   }

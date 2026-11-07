@@ -10,9 +10,16 @@ import { checkScopes, expandScopes, restrictedAllows } from "../../src/domain/ap
 import {
   type ApprovalRecord,
   afterAttestation,
+  applyRoleChange,
   approvedBy,
+  atActivation,
+  currentManagers,
   type Decision,
   decide,
+  effectiveRequired,
+  isExpired,
+  type ManagerGrant,
+  recentManagers,
 } from "../../src/domain/approval/approval.js";
 import { idleExpiresAt, OPS_ABSOLUTE_MS, OPS_IDLE_MS, sessionState } from "../../src/domain/session/session.js";
 import { approvalsRequired } from "../../src/domain/settlement-destination/destination.js";
@@ -24,18 +31,28 @@ import { canChangeRole, canRemove, type Role } from "../../src/domain/team/team.
 
 type Step = { kind: "attest" } | { kind: "decide"; by: number; decision: Decision };
 
+const DAY = 86_400_000;
+const T0 = 10_000 * DAY;
+
+/** `managers` tenured owners/admins: the creator and the first others of u0…u5. */
+function tenuredTeam(managers: number, creator: number): ManagerGrant[] {
+  const ids = [creator, ...[0, 1, 2, 3, 4, 5].filter((i) => i !== creator)].slice(0, managers);
+  return ids.map((i) => ({ userId: `u${i}`, grantedAt: T0 - 90 * DAY, qualifiesAt: T0 - 80 * DAY, revokedAt: null }));
+}
+
 /** Runs a destination through attestation and decisions; returns the trace of statuses and approvals. */
 function run(managers: number, creator: number, steps: readonly Step[]) {
   const required = approvalsRequired(managers, true);
+  const ctx = { createdAt: T0 - DAY, now: T0, cooloffMs: DAY, grants: tenuredTeam(managers, creator) };
   let status = "pending_verification";
   let approvals: ApprovalRecord[] = [{ userId: `u${creator}`, decision: "approve" }];
   const trace: { status: string; approvals: ApprovalRecord[] }[] = [];
   for (const st of steps) {
     if (status === "disabled" || status === "cooling_off") break;
     if (st.kind === "attest") {
-      if (status === "pending_verification") status = afterAttestation(required, approvals);
+      if (status === "pending_verification") status = afterAttestation(ctx, required, approvals).to;
     } else {
-      const out = decide({ status, required, createdBy: `u${creator}`, approvals }, `u${st.by}`, st.decision);
+      const out = decide({ ...ctx, status, required, createdBy: `u${creator}`, approvals }, `u${st.by}`, st.decision);
       if (out.ok) {
         approvals = [...approvals, out.record];
         status = out.to;
@@ -127,6 +144,273 @@ describe("two-approver rule", () => {
         expect(trace[0]?.status).toBe("cooling_off");
       }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Audit finding 1: one human cannot satisfy the two-approver rule
+// ---------------------------------------------------------------------------------------------
+//
+// Model of the account: the grant history (the memberships trigger, `applyRoleChange`) and the
+// destination lifecycle driven only through the domain functions the use cases call (creation's
+// requirement, afterAttestation, decide, atActivation, isExpired). The account starts with ≥ 2
+// tenured managers: `L` (the attacker's session) and the honest `H0…` (passive: they never act).
+// The attacker runs any sequence for up to 30 days: invite users they control (puppets) as owner or
+// admin (they join), promote/demote/remove anyone (honest managers included), create destinations
+// from any manager they control, attest, approve from any user they control, run the activation job,
+// let time pass. No destination may ever reach `active`.
+
+type Op =
+  | { kind: "invite" }
+  | { kind: "demote" | "promote" | "remove"; who: number }
+  | { kind: "create"; by: number }
+  | { kind: "attest"; dest: number }
+  | { kind: "approve"; dest: number; by: number }
+  | { kind: "activate"; dest: number }
+  | { kind: "wait"; hours: number };
+
+// weighted towards the attack shape (invite, age, create, attest, approve, activate) so shrinking finds it
+const op = fc.oneof(
+  { arbitrary: fc.constant<Op>({ kind: "invite" }), weight: 2 },
+  {
+    arbitrary: fc.record({
+      kind: fc.constantFrom("demote" as const, "promote" as const, "remove" as const),
+      who: fc.nat(5),
+    }),
+    weight: 2,
+  },
+  { arbitrary: fc.record({ kind: fc.constant("create" as const), by: fc.nat(3) }), weight: 2 },
+  { arbitrary: fc.record({ kind: fc.constant("attest" as const), dest: fc.nat(2) }), weight: 2 },
+  { arbitrary: fc.record({ kind: fc.constant("approve" as const), dest: fc.nat(2), by: fc.nat(3) }), weight: 4 },
+  { arbitrary: fc.record({ kind: fc.constant("activate" as const), dest: fc.nat(2) }), weight: 2 },
+  {
+    arbitrary: fc.record({ kind: fc.constant("wait" as const), hours: fc.integer({ min: 1, max: 24 * 10 }) }),
+    weight: 3,
+  },
+);
+
+interface Dest {
+  status: string;
+  stored: number;
+  createdAt: number;
+  createdBy: string;
+  approvals: ApprovalRecord[];
+  activeAt: number;
+}
+
+function attack(honest: number, ops: readonly Op[], cooloffMs: number): Dest[] {
+  const start = T0;
+  let now = start;
+  const old = (u: string): ManagerGrant => ({
+    userId: u,
+    grantedAt: start - 400 * DAY,
+    qualifiesAt: start - 390 * DAY,
+    revokedAt: null,
+  });
+  const honestIds = Array.from({ length: honest }, (_, i) => `H${i}`);
+  let grants: ManagerGrant[] = [old("L"), ...honestIds.map(old)];
+  const members = new Set(["L", ...honestIds]);
+  const role = new Map<string, boolean>([...members].map((u) => [u, true])); // manager?
+  const controlled = ["L"];
+  const everyone = () => [...controlled, ...honestIds];
+  const dests: Dest[] = [];
+  const setManager = (u: string, m: boolean) => {
+    grants = applyRoleChange(grants, u, role.get(u) === true, m, now);
+    role.set(u, m);
+  };
+  const ctxOf = (d: Dest) => ({ createdAt: d.createdAt, now, cooloffMs, grants });
+  for (const o of ops) {
+    if (now - start > 30 * DAY) break;
+    switch (o.kind) {
+      case "invite": {
+        const p = `P${controlled.length}`;
+        controlled.push(p);
+        members.add(p);
+        role.set(p, false);
+        setManager(p, true);
+        break;
+      }
+      case "demote":
+      case "promote":
+      case "remove": {
+        const u = everyone()[o.who % everyone().length] as string;
+        if (!members.has(u)) break;
+        // the account keeps one manager (last owner rule); the attacker must hold a manager role to act
+        if (o.kind !== "promote" && currentManagers(grants).length <= 1) break;
+        if (o.kind === "remove") {
+          setManager(u, false);
+          members.delete(u);
+        } else if (o.kind === "promote") setManager(u, true);
+        else setManager(u, false);
+        break;
+      }
+      case "create": {
+        const by = controlled[o.by % controlled.length] as string;
+        if (role.get(by) !== true) break;
+        const managers = currentManagers(grants).length;
+        dests.push({
+          status: "pending_verification",
+          stored: effectiveRequired(managers >= 2 ? 2 : 1, grants, now),
+          createdAt: now,
+          createdBy: by,
+          approvals: [{ userId: by, decision: "approve" }],
+          activeAt: 0,
+        });
+        break;
+      }
+      case "attest": {
+        const d = dests[o.dest % Math.max(1, dests.length)];
+        if (d?.status !== "pending_verification" || isExpired(d.createdAt, now)) break;
+        const r = afterAttestation(ctxOf(d), d.stored, d.approvals);
+        d.stored = r.required;
+        d.status = r.to;
+        if (r.to === "cooling_off") d.activeAt = now + cooloffMs;
+        break;
+      }
+      case "approve": {
+        const d = dests[o.dest % Math.max(1, dests.length)];
+        const by = controlled[o.by % controlled.length] as string;
+        if (!d || role.get(by) !== true) break;
+        const out = decide(
+          { ...ctxOf(d), status: d.status, required: d.stored, createdBy: d.createdBy, approvals: d.approvals },
+          by,
+          "approve",
+        );
+        if (!out.ok) break;
+        d.approvals.push(out.record);
+        d.stored = out.required;
+        d.status = out.to;
+        if (out.to === "cooling_off") d.activeAt = now + cooloffMs;
+        break;
+      }
+      case "activate": {
+        const d = dests[o.dest % Math.max(1, dests.length)];
+        if (d?.status !== "cooling_off" || now < d.activeAt) break;
+        const r = atActivation(ctxOf(d), d.stored, d.approvals);
+        d.stored = r.required;
+        d.status = r.to;
+        break;
+      }
+      case "wait":
+        now += o.hours * 3_600_000;
+        for (const d of dests)
+          if ((d.status === "pending_verification" || d.status === "pending_approval") && isExpired(d.createdAt, now))
+            d.status = "disabled";
+        break;
+    }
+  }
+  return dests;
+}
+
+describe("two-approver rule against one human (audit finding 1)", () => {
+  it("no sequence by one human within 30 days activates a destination on an account that had ≥ 2 managers", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 3 }),
+        fc.array(op, { maxLength: 60 }),
+        fc.constantFrom(0, DAY, 3 * DAY),
+        (honest, ops, cooloff) => {
+          for (const d of attack(honest, ops, cooloff)) {
+            expect(d.status).not.toBe("active");
+            expect(d.status).not.toBe("cooling_off");
+          }
+        },
+      ),
+      { numRuns: 10_000 },
+    );
+  });
+
+  it("the targeted attacks: puppet approver, puppet creator, remove-then-create, re-add", () => {
+    const wait = (days: number): Op => ({ kind: "wait", hours: days * 24 });
+    const scenarios: Op[][] = [
+      // A: invite a puppet, let it age, create, puppet approves
+      [
+        { kind: "invite" },
+        wait(8),
+        { kind: "create", by: 0 },
+        { kind: "attest", dest: 0 },
+        { kind: "approve", dest: 0, by: 1 },
+        wait(2),
+        { kind: "activate", dest: 0 },
+      ],
+      // A': the puppet creates, the attacker's own session approves
+      [
+        { kind: "invite" },
+        wait(8),
+        { kind: "create", by: 1 },
+        { kind: "attest", dest: 0 },
+        { kind: "approve", dest: 0, by: 0 },
+        wait(2),
+        { kind: "activate", dest: 0 },
+      ],
+      // B: remove the honest manager, create (alone), attest, activate
+      [
+        { kind: "remove", who: 1 },
+        { kind: "create", by: 0 },
+        { kind: "attest", dest: 0 },
+        wait(2),
+        { kind: "activate", dest: 0 },
+      ],
+      // B': remove, invite a puppet, wait, create, approve
+      [
+        { kind: "remove", who: 1 },
+        { kind: "invite" },
+        wait(9),
+        { kind: "create", by: 0 },
+        { kind: "attest", dest: 0 },
+        { kind: "approve", dest: 0, by: 1 },
+        wait(2),
+        { kind: "activate", dest: 0 },
+      ],
+      // demote the honest manager instead of removing
+      [
+        { kind: "demote", who: 1 },
+        { kind: "create", by: 0 },
+        { kind: "attest", dest: 0 },
+        wait(2),
+        { kind: "activate", dest: 0 },
+      ],
+    ];
+    for (const ops of scenarios)
+      for (const d of attack(1, ops, DAY)) expect(d.status).not.toMatch(/active|cooling_off/);
+  });
+
+  it("is not vacuous: two honest tenured managers complete it, and a new two-founder team does after 7 days", () => {
+    const ctx = (grants: ManagerGrant[], createdAt: number, now: number) => ({
+      createdAt,
+      now,
+      cooloffMs: DAY,
+      grants,
+    });
+    const team = tenuredTeam(2, 0);
+    const out = decide(
+      {
+        ...ctx(team, T0 - DAY, T0),
+        status: "pending_approval",
+        required: 2,
+        createdBy: "u0",
+        approvals: [{ userId: "u0", decision: "approve" }],
+      },
+      "u1",
+      "approve",
+    );
+    expect(out).toMatchObject({ ok: true, to: "cooling_off" });
+    // founder signs up at T0, invites a co-founder at T0 + 1 d, creates at T0 + 2 d; approval at T0 + 8 d
+    let g = applyRoleChange([], "f", false, true, T0);
+    g = applyRoleChange(g, "c", false, true, T0 + DAY);
+    expect(recentManagers(g, T0 + DAY)).toHaveLength(2);
+    const founders = decide(
+      {
+        ...ctx(g, T0 + 2 * DAY, T0 + 8 * DAY),
+        status: "pending_approval",
+        required: 2,
+        createdBy: "f",
+        approvals: [{ userId: "f", decision: "approve" }],
+      },
+      "c",
+      "approve",
+    );
+    expect(founders).toMatchObject({ ok: true, to: "cooling_off" });
   });
 });
 
