@@ -15,6 +15,7 @@ import { audit, dbNow, emitEvent, type Identity } from "../app/context.js";
 import { ACTIVATE_JOB, createDestination } from "../app/destinations.js";
 import { accountView } from "../app/views.js";
 import { DEFAULT_SETTINGS } from "../domain/account/account.js";
+import { isDevEnv } from "../domain/env.js";
 
 export const USAGE = `usage: ops.js <command> [arguments] [--actor <name>]
 
@@ -45,7 +46,7 @@ const need = (v: string | undefined, what: string) => {
 };
 
 function localOnly(id: Identity, what: string) {
-  if (id.env !== "local" && id.env !== "test") throw new UsageError(`${what} is available only when NP_ENV=local`);
+  if (!isDevEnv(id.env)) throw new UsageError(`${what} is available only when NP_ENV=local`);
 }
 
 async function userByEmail(id: Identity, email: string) {

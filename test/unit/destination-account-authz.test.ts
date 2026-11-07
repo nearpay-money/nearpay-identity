@@ -165,6 +165,9 @@ describe("gateway rules", () => {
     expect(clientIp("server", { cfConnectingIp: "1.2.3.4", xForwardedFor: "9.9.9.9" })).toBe("1.2.3.4");
     expect(clientIp("local", { cfConnectingIp: "1.2.3.4", xForwardedFor: "9.9.9.9, 10.0.0.1" })).toBe("9.9.9.9");
     expect(clientIp("local", {})).toBeNull();
+    // audit finding 2: X-Forwarded-For only for NP_ENV local/test; any other stage reads CF-Connecting-IP
+    expect(clientIp("staging", { cfConnectingIp: "1.2.3.4", xForwardedFor: "9.9.9.9" })).toBe("1.2.3.4");
+    expect(clientIp("test", { cfConnectingIp: "1.2.3.4", xForwardedFor: "9.9.9.9" })).toBe("9.9.9.9");
     expect(clientIp("local", { xForwardedFor: "<script>" })).toBeNull();
   });
   it("token buckets refill at the rate and cap at the burst", () => {

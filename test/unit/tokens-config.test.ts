@@ -6,6 +6,7 @@ import { createLocalJWKSet, jwtVerify } from "jose";
 import { describe, expect, it } from "vitest";
 import { authenticateClient, kidOf, loadServiceClients, loadSigner } from "../../src/app/tokens.js";
 import { checkCooloff } from "../../src/config.js";
+import { isDevEnv } from "../../src/domain/env.js";
 import { turnstile } from "../../src/infra/clients/turnstile.js";
 
 const pem = () => generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString();
@@ -92,6 +93,21 @@ describe("turnstile", () => {
     const bad = (async () => new Response("no", { status: 500 })) as unknown as typeof fetch;
     await expect(turnstile({ secret: "real", env: "local", fetch: bad })("tok", null)).rejects.toThrow(/500/);
   });
+  // audit finding 2: the always-pass test secret is answered locally only for NP_ENV local/test
+  it("never answers a test secret locally on any stage other than local/test", async () => {
+    for (const env of ["staging", "production", "", "Local"]) {
+      const calls: string[] = [];
+      const f = (async (_u: string, init: RequestInit) => {
+        calls.push(String(init.body));
+        return new Response(JSON.stringify({ success: false }), { headers: { "content-type": "application/json" } });
+      }) as unknown as typeof fetch;
+      expect(await turnstile({ secret: "1x0000000000000000000000000000000AA", env, fetch: f })("tok", null)).toBe(
+        false,
+      );
+      expect(calls).toHaveLength(1);
+    }
+    expect(await turnstile({ secret: "1x0000000000000000000000000000000AA", env: "test" })("t", null)).toBe(true);
+  });
 });
 
 describe("configuration", () => {
@@ -99,5 +115,7 @@ describe("configuration", () => {
     expect(() => checkCooloff({ env: "local", cooloffSeconds: 0 })).not.toThrow();
     expect(() => checkCooloff({ env: "server", cooloffSeconds: 0 })).toThrow(/NP_ENV=local/);
     expect(() => checkCooloff({ env: "server", cooloffSeconds: 86_400 })).not.toThrow();
+    expect(() => checkCooloff({ env: "staging", cooloffSeconds: 0 })).toThrow(/NP_ENV=local/);
+    expect(isDevEnv("test") && isDevEnv("local") && !isDevEnv("server") && !isDevEnv("staging")).toBe(true);
   });
 });
