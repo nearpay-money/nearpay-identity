@@ -3,7 +3,23 @@ import { KEY_SCOPES } from "@nearpay/spec";
 import { describe, expect, it } from "vitest";
 import { consoleConfig, parseAaguids, parsePemBundle } from "../../src/config.js";
 import { checkScopes, expandScopes, restrictedAllows } from "../../src/domain/api-key/key.js";
-import { afterAttestation, approvedBy, decide, isComplete, rejectedBy } from "../../src/domain/approval/approval.js";
+import {
+  afterAttestation,
+  applyRoleChange,
+  approvedBy,
+  approverQualifies,
+  atActivation,
+  CONTESTED_MANAGER_TENURE_MS,
+  decide,
+  effectiveRequired,
+  evaluate,
+  grantQualifiesAt,
+  isExpired,
+  MANAGER_TENURE_MS,
+  type ManagerGrant,
+  PENDING_DESTINATION_TTL_MS,
+  rejectedBy,
+} from "../../src/domain/approval/approval.js";
 import { isConsoleHost, isConsolePath } from "../../src/domain/authz/authz.js";
 import { authenticatorProblem } from "../../src/domain/console/console.js";
 import { idleExpiresAt, LIFETIME, OPS_IDLE_MS, sessionState } from "../../src/domain/session/session.js";
@@ -16,17 +32,32 @@ import {
   isOwnerOrAdmin,
 } from "../../src/domain/team/team.js";
 
+const DAY = 86_400_000;
+const NOW = 1_000 * DAY;
+/** A grant held since `daysAgo` that qualified long ago. */
+const tenured = (userId: string, daysAgo = 60): ManagerGrant => ({
+  userId,
+  grantedAt: NOW - daysAgo * DAY,
+  qualifiesAt: NOW - (daysAgo - 7) * DAY,
+  revokedAt: null,
+});
+
 describe("two-approver rule", () => {
   const pending = {
     status: "pending_approval",
     required: 2,
     createdBy: "a",
     approvals: [{ userId: "a", decision: "approve" as const }],
+    createdAt: NOW - DAY,
+    now: NOW,
+    cooloffMs: DAY,
+    grants: [tenured("a"), tenured("b"), tenured("c")],
   };
-  it("a second, different owner/admin completes it", () => {
+  it("a second, different, tenured owner/admin completes it", () => {
     expect(decide(pending, "b", "approve")).toEqual({
       ok: true,
       record: { userId: "b", decision: "approve" },
+      required: 2,
       to: "cooling_off",
     });
   });
@@ -38,33 +69,47 @@ describe("two-approver rule", () => {
     const s = { ...pending, createdBy: "z", approvals: [...pending.approvals] };
     expect(decide(s, "a", "approve")).toMatchObject({ ok: false, error: "approver_conflict" });
   });
-  it("a rejection disables", () => {
+  it("a rejection disables (no tenure needed to say no)", () => {
     expect(decide(pending, "b", "reject")).toMatchObject({ ok: true, to: "disabled" });
+    const fresh = { ...pending, grants: [tenured("a"), { ...tenured("p"), grantedAt: NOW - DAY / 2 }] };
+    expect(decide(fresh, "p", "reject")).toMatchObject({ ok: true, to: "disabled" });
   });
-  it("only pending_approval destinations take decisions", () => {
+  it("only pending_approval destinations take decisions; pending ones expire after 7 days", () => {
     for (const status of ["pending_verification", "cooling_off", "active", "disabled"])
       expect(decide({ ...pending, status }, "b", "approve")).toMatchObject({ ok: false, error: "state_conflict" });
+    expect(decide({ ...pending, createdAt: NOW - PENDING_DESTINATION_TTL_MS }, "b", "approve")).toEqual({
+      ok: false,
+      error: "state_conflict",
+      reason: "expired",
+    });
+    expect(isExpired(NOW - PENDING_DESTINATION_TTL_MS + 1, NOW)).toBe(false);
   });
   it("three required (never configured) needs a third user", () => {
     expect(decide({ ...pending, required: 3 }, "b", "approve")).toMatchObject({ ok: true, to: "pending_approval" });
   });
-  it("completion counts distinct approvers and no rejection", () => {
-    expect(isComplete(1, [{ userId: "a", decision: "approve" }])).toBe(true);
+  it("completion counts distinct qualifying approvers and no rejection", () => {
+    const ctx = { createdAt: NOW - DAY, now: NOW, cooloffMs: DAY, grants: [tenured("a")] };
+    expect(evaluate(ctx, 1, [{ userId: "a", decision: "approve" }])).toEqual({ required: 1, complete: true });
+    const two = { ...ctx, grants: [tenured("a"), tenured("b")] };
     expect(
-      isComplete(2, [
+      evaluate(two, 2, [
         { userId: "a", decision: "approve" },
         { userId: "a", decision: "approve" },
-      ]),
+      ]).complete,
     ).toBe(false);
     expect(
-      isComplete(1, [
+      evaluate(ctx, 1, [
         { userId: "a", decision: "approve" },
         { userId: "b", decision: "reject" },
-      ]),
+      ]).complete,
     ).toBe(false);
-    expect(isComplete(0, [])).toBe(false);
-    expect(afterAttestation(2, pending.approvals)).toBe("pending_approval");
-    expect(afterAttestation(1, pending.approvals)).toBe("cooling_off");
+    expect(evaluate(ctx, 0, []).complete).toBe(false);
+    // a user who is no longer an owner/admin never counts
+    expect(evaluate({ ...ctx, grants: [] }, 1, [{ userId: "a", decision: "approve" }]).complete).toBe(false);
+    expect(afterAttestation(two, 2, pending.approvals)).toEqual({ required: 2, to: "pending_approval" });
+    expect(afterAttestation(ctx, 1, pending.approvals)).toEqual({ required: 1, to: "cooling_off" });
+    expect(atActivation(two, 1, pending.approvals)).toEqual({ required: 2, to: "pending_approval" });
+    expect(atActivation(ctx, 1, pending.approvals)).toEqual({ required: 1, to: "active" });
     expect(
       approvedBy([
         { userId: "a", decision: "approve" },
@@ -73,6 +118,58 @@ describe("two-approver rule", () => {
     ).toEqual(["a"]);
     expect(rejectedBy([{ userId: "b", decision: "reject" }])).toBe("b");
     expect(rejectedBy([])).toBeNull();
+  });
+
+  // audit finding 1, scenario A: a puppet admin invited by one manager cannot be the second approver
+  it("a manager granted after the destination was created, or too recently, does not count", () => {
+    const puppetAfter = { ...tenured("p"), grantedAt: NOW - DAY / 2, qualifiesAt: NOW - DAY / 4 };
+    expect(decide({ ...pending, grants: [tenured("a"), tenured("b"), puppetAfter] }, "p", "approve")).toMatchObject({
+      ok: false,
+      error: "approver_conflict",
+    });
+    const puppetYoung = { userId: "p", grantedAt: NOW - 3 * DAY, qualifiesAt: NOW + 4 * DAY, revokedAt: null };
+    expect(decide({ ...pending, grants: [tenured("a"), tenured("b"), puppetYoung] }, "p", "approve")).toMatchObject({
+      ok: false,
+      error: "approver_conflict",
+    });
+    // qualified but within the cool-off
+    const withinCooloff = { userId: "p", grantedAt: NOW - 2 * DAY, qualifiesAt: NOW - DAY, revokedAt: null };
+    expect(
+      approverQualifies({ ...pending, createdAt: NOW - DAY, cooloffMs: 3 * DAY, grants: [withinCooloff] }, 2, "p"),
+    ).toBe(false);
+    // a puppet creator's own approval does not count either
+    const byPuppet = { ...pending, createdBy: "p", approvals: [{ userId: "p", decision: "approve" as const }] };
+    expect(decide({ ...byPuppet, grants: [tenured("a"), puppetYoung] }, "a", "approve")).toMatchObject({
+      ok: true,
+      to: "pending_approval",
+    });
+  });
+
+  // audit finding 1, scenario B: removing the other managers first does not lower the requirement
+  it("the requirement is the 30-day high-water mark of owners/admins, never only the stored value", () => {
+    const removed = { ...tenured("b"), revokedAt: NOW - 10 * DAY };
+    expect(effectiveRequired(1, [tenured("a"), removed], NOW)).toBe(2);
+    expect(effectiveRequired(1, [tenured("a"), { ...removed, revokedAt: NOW - 31 * DAY }], NOW)).toBe(1);
+    expect(effectiveRequired(1, [tenured("a"), tenured("b")], NOW)).toBe(2);
+    expect(effectiveRequired(2, [tenured("a")], NOW)).toBe(2);
+    expect(decide({ ...pending, required: 1, grants: [tenured("a"), removed] }, "b", "approve")).toMatchObject({
+      ok: false,
+      error: "approver_conflict",
+    });
+  });
+
+  it("a grant next to two other recent managers waits 30 days, otherwise 7; owner<->admin keeps the grant", () => {
+    expect(grantQualifiesAt([tenured("a")], "b", NOW)).toBe(NOW + MANAGER_TENURE_MS);
+    expect(grantQualifiesAt([tenured("a"), tenured("b")], "p", NOW)).toBe(NOW + CONTESTED_MANAGER_TENURE_MS);
+    // the grantee's own earlier grants do not count
+    expect(grantQualifiesAt([tenured("a"), { ...tenured("p"), revokedAt: NOW - DAY }], "p", NOW)).toBe(
+      NOW + MANAGER_TENURE_MS,
+    );
+    let g = applyRoleChange([tenured("a")], "b", false, true, NOW);
+    expect(g).toHaveLength(2);
+    expect(applyRoleChange(g, "b", true, true, NOW + DAY)).toEqual(g);
+    g = applyRoleChange(g, "b", true, false, NOW + DAY);
+    expect(g.find((x) => x.userId === "b")?.revokedAt).toBe(NOW + DAY);
   });
 });
 

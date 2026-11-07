@@ -15,7 +15,17 @@ import { HttpError } from "@nearpay-internal/http";
 import { fromUuid, toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { ApiError } from "@nearpay-internal/service";
 import type { Subject } from "@nearpay-internal/spec";
-import { afterAttestation, type Decision, decide } from "../domain/approval/approval.js";
+import {
+  type ApprovalContext,
+  afterAttestation,
+  atActivation,
+  type Decision,
+  decide,
+  effectiveRequired,
+  isExpired,
+  type ManagerGrant,
+  PENDING_DESTINATION_TTL_MS,
+} from "../domain/approval/approval.js";
 import {
   approvalsRequired,
   attestationMessage,
@@ -76,6 +86,39 @@ async function approvalsOf(db: Identity["db"] | Tx, ids: readonly string[]): Pro
 
 const approvalsFor = async (db: Identity["db"] | Tx, d: DestinationRow) =>
   (await approvalsOf(db, [d.id])).get(d.id) ?? [];
+
+/** The account's owner/admin grant history (migration 0005; written by the memberships trigger). */
+async function managerGrants(db: Identity["db"] | Tx, accountUuid: string): Promise<ManagerGrant[]> {
+  const rows = await db
+    .selectFrom("manager_grants")
+    .select(["user_id", "granted_at", "qualifies_at", "revoked_at"])
+    .where("account_id", "=", accountUuid)
+    .execute();
+  return rows.map((g) => ({
+    userId: g.user_id,
+    grantedAt: g.granted_at.getTime(),
+    qualifiesAt: g.qualifies_at.getTime(),
+    revokedAt: g.revoked_at ? g.revoked_at.getTime() : null,
+  }));
+}
+
+/** What the two-approver rule is evaluated against, on the database clock (the trigger's clock). */
+async function approvalContext(id: Identity, tx: Tx, d: DestinationRow): Promise<ApprovalContext> {
+  return {
+    createdAt: d.created_at.getTime(),
+    now: (await dbNow(tx)).getTime(),
+    cooloffMs: id.cooloffMs,
+    grants: await managerGrants(tx, d.account_id),
+  };
+}
+
+const records = (approvals: ApprovalRow[]) => approvals.map((a) => ({ userId: a.user_id, decision: a.decision }));
+
+const expiredConflict = () =>
+  new ApiError("state_conflict", {
+    params: { object: "settlement_destination", state: "expired" },
+    message: `The settlement_destination expired ${PENDING_DESTINATION_TTL_MS / 86_400_000} days after creation; add it again.`,
+  });
 
 /** Rails minimums for active destinations (cached 1 h; unavailable → null, §10). */
 async function minimumsFor(id: Identity, rows: DestinationRow[]): Promise<Map<string, number | null>> {
@@ -211,7 +254,13 @@ async function record(
   set: Partial<
     Pick<
       DestinationRow,
-      "active_at" | "attestation" | "verification" | "disabled_at" | "disabled_reason" | "screening_id"
+      | "active_at"
+      | "attestation"
+      | "verification"
+      | "disabled_at"
+      | "disabled_reason"
+      | "screening_id"
+      | "approvals_required"
     >
   > = {},
 ): Promise<DestinationRow> {
@@ -415,6 +464,10 @@ export async function createDestination(
           ).n,
         )
       : 0;
+    // … and never below the 30-day high-water mark of owners/admins (removing them first does not help)
+    const required = livemode
+      ? effectiveRequired(approvalsRequired(managers, true), await managerGrants(tx, acct), (await dbNow(tx)).getTime())
+      : 1;
     const created = await tx
       .insertInto("settlement_destinations")
       .values({
@@ -431,7 +484,7 @@ export async function createDestination(
         verification: livemode ? "signature" : "test",
         screening_id: screening.screening_id,
         created_by: actor.userUuid,
-        approvals_required: livemode ? approvalsRequired(managers, true) : 1,
+        approvals_required: required,
       })
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -528,6 +581,7 @@ export async function challengeDestination(
     const d = await loadOwn(tx, accountId, livemode, destinationId, true);
     if (!transition(d.status, "challenge").ok)
       throw new ApiError("state_conflict", { params: { object: "settlement_destination", state: d.status } });
+    if (isExpired(d.created_at.getTime(), (await dbNow(tx)).getTime())) throw expiredConflict();
     const info = getChain(d.chain);
     if (!info) throw new Error(`destination ${destinationId} is on an unsupported chain ${d.chain}`);
     const standard = signingStandard(d.type, info.family, d.address_norm);
@@ -613,6 +667,8 @@ export async function attestDestination(
     const d = await loadOwn(tx, accountId, livemode, destinationId, true);
     const s = transition(d.status, "attest");
     if (!s.ok) throw new ApiError("state_conflict", { params: { object: "settlement_destination", state: d.status } });
+    const ctx = await approvalContext(id, tx, d);
+    if (isExpired(ctx.createdAt, ctx.now)) throw expiredConflict();
     const used = await tx
       .updateTable("attestation_challenges")
       .set({ used_at: await dbNow(tx) })
@@ -624,11 +680,8 @@ export async function attestDestination(
     if (Number(used.numUpdatedRows) !== 1) throw new ApiError("challenge_expired");
     const now = await dbNow(tx);
     const approvals = await approvalsFor(tx, d);
-    // two approvers required and only the creator so far: wait for the second owner/admin
-    const to = afterAttestation(
-      d.approvals_required,
-      approvals.map((a) => ({ userId: a.user_id, decision: a.decision })),
-    );
+    // two approvers required (now, not only at creation) and not enough qualifying approvals: wait
+    const { required, to } = afterAttestation(ctx, d.approvals_required, records(approvals));
     const activeAt = new Date(now.getTime() + id.cooloffMs);
     const attestation = {
       standard: b.standard,
@@ -643,6 +696,7 @@ export async function attestDestination(
     try {
       next = await record(id, tx, d, to, "attested", actor.id, {
         attestation,
+        approvals_required: required,
         ...(to === "cooling_off" ? { active_at: activeAt } : {}),
       });
     } catch (e) {
@@ -681,8 +735,10 @@ async function startCooloff(tx: Tx, d: DestinationRow, activeAt: Date) {
 /**
  * `POST /v1/settlement_destinations/{id}/approve` (spec 0.2.0, §5 two-approver rule). Checked on the
  * session's user id: the approver must be a current owner/admin other than the creator and every
- * earlier approver (`403 approver_conflict`, repeated by the approvals primary key and the
- * `destination_approvals_complete` trigger). The last approval starts the cool-off (job at
+ * earlier approver, and (to approve) hold the role under a grant older than the destination and past
+ * its tenure (`403 approver_conflict`; domain/approval/approval.ts, repeated by the approvals primary
+ * key and the `destination_approvals_complete` trigger); the requirement is re-derived from today's
+ * team and its 30-day high-water mark; destinations pending 7 days are expired (`409 state_conflict`). The last approval starts the cool-off (job at
  * `active_at`); a rejection disables the destination (`merchant`). Only `pending_approval`.
  */
 export async function approveDestination(
@@ -719,17 +775,20 @@ export async function approveDestination(
     const approvals = await approvalsFor(tx, d);
     const out = decide(
       {
+        ...(await approvalContext(id, tx, d)),
         status: d.status,
         required: d.approvals_required,
         createdBy: d.created_by,
-        approvals: approvals.map((a) => ({ userId: a.user_id, decision: a.decision })),
+        approvals: records(approvals),
       },
       actor.userUuid,
       decision,
     );
     if (!out.ok) {
-      if (out.error === "state_conflict")
+      if (out.error === "state_conflict") {
+        if (out.reason === "expired") throw expiredConflict();
         throw new ApiError("state_conflict", { params: { object: "settlement_destination", state: d.status } });
+      }
       throw new ApiError("approver_conflict", { params: { reason: out.reason } });
     }
     try {
@@ -746,9 +805,19 @@ export async function approveDestination(
     if (out.to === "disabled") next = await disableRow(id, tx, d, "merchant", actor.id);
     else if (out.to === "cooling_off") {
       const activeAt = new Date((await dbNow(tx)).getTime() + id.cooloffMs);
-      next = await record(id, tx, d, "cooling_off", "approved", actor.id, { active_at: activeAt });
+      next = await record(id, tx, d, "cooling_off", "approved", actor.id, {
+        active_at: activeAt,
+        approvals_required: out.required,
+      });
       await startCooloff(tx, next, activeAt);
-    }
+    } else if (out.required > d.approvals_required)
+      // the requirement only ever rises (the public `approval.required` shows it)
+      next = await tx
+        .updateTable("settlement_destinations")
+        .set({ approvals_required: out.required })
+        .where("id", "=", d.id)
+        .returningAll()
+        .executeTakeFirstOrThrow();
     await audit(id, tx, {
       accountUuid: d.account_id,
       actor,
@@ -767,7 +836,7 @@ export async function approveDestination(
 export async function activateDestination(
   id: Identity,
   destinationUuid: string,
-): Promise<"activated" | "skipped" | "blocked"> {
+): Promise<"activated" | "skipped" | "blocked" | "reapproval"> {
   const d0 = await id.db
     .selectFrom("settlement_destinations")
     .selectAll()
@@ -795,7 +864,32 @@ export async function activateDestination(
       await disableRow(id, tx, d, "compliance", "system:activation-screening");
       return "blocked";
     }
-    await becomeActive(id, tx, d, "cooloff_elapsed", "system", { screening_id: screening.screening_id });
+    // the approvals are checked again on today's team: a new owner/admin (or a lost approver) sends the
+    // destination back to approval instead of activating it
+    const check = atActivation(
+      await approvalContext(id, tx, d),
+      d.approvals_required,
+      records(await approvalsFor(tx, d)),
+    );
+    if (check.to === "pending_approval") {
+      const back = await record(id, tx, d, "pending_approval", "approvals_incomplete", "system", {
+        active_at: null,
+        approvals_required: check.required,
+      });
+      await emitDestination(tx, back, "pending_approval");
+      await audit(id, tx, {
+        accountUuid: d.account_id,
+        actor: { type: "system", id: "system:activation" },
+        action: "destination.approval_required",
+        target: { type: "settlement_destination", id: fromUuid("sd", d.id) },
+        details: { approvals_required: check.required },
+      });
+      return "reapproval";
+    }
+    await becomeActive(id, tx, d, "cooloff_elapsed", "system", {
+      screening_id: screening.screening_id,
+      approvals_required: check.required,
+    });
     return "activated";
   });
 }
@@ -806,9 +900,10 @@ async function disableRow(
   d: DestinationRow,
   reason: "merchant" | "compliance" | "replaced",
   actor: string,
+  cause = `disabled:${reason}`,
 ) {
   const now = await dbNow(tx);
-  const disabled = await record(id, tx, d, "disabled", `disabled:${reason}`, actor, {
+  const disabled = await record(id, tx, d, "disabled", cause, actor, {
     disabled_at: now,
     disabled_reason: reason,
   });
@@ -825,6 +920,46 @@ async function disableRow(
   if (wasDefault) await emitDestination(tx, disabled, "default_changed");
   if (d.livemode) await refreshLiveEnabled(tx, d.account_id);
   return disabled;
+}
+
+export const EXPIRE_JOB = "destination.expire";
+
+/**
+ * Job `destination.expire` (hourly, §9): live destinations still pending (verification or approval)
+ * 7 days after creation are disabled (`disabled_reason: merchant`, transition cause `expired`, audit
+ * `destination.expired`), so a stale pending change cannot be approved later on a changed team.
+ */
+export async function expirePendingDestinations(id: Identity): Promise<number> {
+  const due = await id.db
+    .selectFrom("settlement_destinations")
+    .select("id")
+    .where("livemode", "=", true)
+    .where("status", "in", ["pending_verification", "pending_approval"])
+    .where("created_at", "<=", sql<Date>`now() - ${`${PENDING_DESTINATION_TTL_MS} milliseconds`}::interval`)
+    .limit(500)
+    .execute();
+  let n = 0;
+  for (const { id: sd } of due)
+    n += await withTx(id.db, async (tx) => {
+      const d = await tx
+        .selectFrom("settlement_destinations")
+        .selectAll()
+        .where("id", "=", sd)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!d || !transition(d.status, "expire").ok || !isExpired(d.created_at.getTime(), (await dbNow(tx)).getTime()))
+        return 0;
+      await disableRow(id, tx, d, "merchant", "system:expiry", "expired");
+      await audit(id, tx, {
+        accountUuid: d.account_id,
+        actor: { type: "system", id: "system:expiry" },
+        action: "destination.expired",
+        target: { type: "settlement_destination", id: fromUuid("sd", d.id) },
+        details: { status: d.status },
+      });
+      return 1;
+    });
+  return n;
 }
 
 export async function disableDestination(

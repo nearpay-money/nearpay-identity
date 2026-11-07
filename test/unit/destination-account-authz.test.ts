@@ -34,6 +34,13 @@ describe("destination state machine", () => {
     });
     expect(transition("pending_approval", "approve")).toEqual({ ok: true, to: "cooling_off" });
     expect(transition("cooling_off", "activate")).toEqual({ ok: true, to: "active" });
+    // audit fix: activation re-checks approvals; pending destinations expire
+    expect(transition("cooling_off", "require_approval")).toEqual({ ok: true, to: "pending_approval" });
+    expect(transition("active", "require_approval")).toEqual({ ok: false, state: "active" });
+    for (const from of ["pending_verification", "pending_approval"] as const)
+      expect(transition(from, "expire")).toEqual({ ok: true, to: "disabled" });
+    for (const from of ["cooling_off", "active", "disabled"] as const)
+      expect(transition(from, "expire")).toEqual({ ok: false, state: from });
     expect(transition("active", "set_default")).toEqual({ ok: true, to: "active" });
     // a re-issued challenge keeps the destination waiting for its signature
     expect(transition("pending_verification", "challenge")).toEqual({ ok: true, to: "pending_verification" });

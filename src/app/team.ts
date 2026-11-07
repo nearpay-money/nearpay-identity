@@ -7,7 +7,10 @@
  * Invitations (7 days, one pending per account and email) mail a single-use link through notify; a
  * signed-in user whose email matches accepts it and the session switches to the joined account
  * (a new user joins through magic-link verification + passkey registration, auth.ts). Team changes emit
- * `evt.identity.member.*` (ids only) in the same transaction and are audited without emails.
+ * `evt.identity.member.*` (ids only) in the same transaction and are audited without emails. For 48 h
+ * after an account recovery no owner/admin can be invited, promoted, demoted or removed
+ * (`403 recovery_lock`); every owner/admin grant is recorded in `manager_grants` by a database trigger
+ * (two-approver rule tenure, migration 0005).
  */
 
 import type { Selectable } from "@nearpay-internal/db";
@@ -22,6 +25,7 @@ import {
   canRemove,
   effectiveStatus,
   INVITATION_MS,
+  isOwnerOrAdmin,
   type Role,
   type TeamCheck,
 } from "../domain/team/team.js";
@@ -53,6 +57,25 @@ async function actorRole(tx: Tx, accountUuid: string, userUuid: string): Promise
     .executeTakeFirst();
   if (!m) throw new ApiError("authentication_required");
   return m.role;
+}
+
+/**
+ * Recovery lock (§12, audit fix): for 48 h after an account recovery nobody may invite, promote,
+ * demote or remove an owner/admin — a recovered attacker must not reshape who approves destinations.
+ */
+async function assertNoRecoveryLock(id: Identity, tx: Tx, accountUuid: string): Promise<void> {
+  const a = await tx
+    .selectFrom("accounts")
+    .select("recovered_at")
+    .where("id", "=", accountUuid)
+    .executeTakeFirstOrThrow();
+  if (a.recovered_at && a.recovered_at.getTime() + id.recoveryLockMs > id.now()) {
+    const until = new Date(a.recovered_at.getTime() + id.recoveryLockMs).toISOString();
+    throw new ApiError("recovery_lock", {
+      params: { until },
+      message: `Owners and admins cannot change until ${until} after account recovery.`,
+    });
+  }
 }
 
 /** Locks the account's owner rows (serialises last-owner checks) and returns their number. */
@@ -161,6 +184,7 @@ export async function updateMember(id: Identity, accountId: string, userId: stri
     const me = await actorRole(tx, acct, actor.userUuid);
     const m = await lockMember(tx, acct, userId);
     enforce(canChangeRole(me, m.role, role, owners));
+    if (m.role !== role && (isOwnerOrAdmin(m.role) || isOwnerOrAdmin(role))) await assertNoRecoveryLock(id, tx, acct);
     if (m.role !== role) {
       await tx
         .updateTable("memberships")
@@ -198,6 +222,7 @@ export async function removeMember(id: Identity, accountId: string, userId: stri
     const me = await actorRole(tx, acct, actor.userUuid);
     const m = await lockMember(tx, acct, userId);
     enforce(canRemove(me, m.role, owners));
+    if (isOwnerOrAdmin(m.role)) await assertNoRecoveryLock(id, tx, acct);
     await tx.deleteFrom("memberships").where("account_id", "=", acct).where("user_id", "=", m.user_id).execute();
     // their sessions for this account end at once
     const revoked = await tx
@@ -291,6 +316,7 @@ export async function createInvitation(
   return withTx(id.db, async (tx) => {
     const me = await actorRole(tx, acct, actor.userUuid);
     enforce(canInvite(me, b.role));
+    if (isOwnerOrAdmin(b.role)) await assertNoRecoveryLock(id, tx, acct);
     const now = await dbNow(tx);
     // expire stale pending invitations of this address first, so the one-pending index only counts live ones
     await tx
