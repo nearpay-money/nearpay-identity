@@ -57,7 +57,16 @@ export type AuthenticationJSON = {
   authenticatorAttachment: string;
 };
 
-export function softPasskey(rpId: string, defaultOrigin: string): SoftPasskey {
+export interface SoftKeyOptions {
+  /** Attestation: `none` (platform passkey, default) or `packed` self attestation (security key). */
+  fmt?: "none" | "packed";
+  /** AAGUID in the attested credential data (default all zero). */
+  aaguid?: string;
+  /** Backup-eligible + backed-up flags: a synced passkey. */
+  synced?: boolean;
+}
+
+export function softPasskey(rpId: string, defaultOrigin: string, ko: SoftKeyOptions = {}): SoftPasskey {
   const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
   const jwk = publicKey.export({ format: "jwk" }) as { x: string; y: string };
   const credId = randomBytes(16);
@@ -72,7 +81,9 @@ export function softPasskey(rpId: string, defaultOrigin: string): SoftPasskey {
       [-3, Buffer.from(jwk.y, "base64url")],
     ]),
   );
-  const flags = (uv: boolean, at: boolean) => (0x01 | (uv ? 0x04 : 0) | (at ? 0x40 : 0)) & 0xff;
+  const flags = (uv: boolean, at: boolean) =>
+    (0x01 | (uv ? 0x04 : 0) | (ko.synced ? 0x18 : 0) | (at ? 0x40 : 0)) & 0xff;
+  const aaguid = ko.aaguid ? Buffer.from(ko.aaguid.replaceAll("-", ""), "hex") : Buffer.alloc(16);
   const count = (n: number) => {
     const b = Buffer.alloc(4);
     b.writeUInt32BE(n);
@@ -97,7 +108,7 @@ export function softPasskey(rpId: string, defaultOrigin: string): SoftPasskey {
         sha(rpId),
         Buffer.from([flags(o.uv ?? true, true)]),
         count(counter),
-        Buffer.alloc(16),
+        aaguid,
         len,
         credId,
         cose,
@@ -108,11 +119,19 @@ export function softPasskey(rpId: string, defaultOrigin: string): SoftPasskey {
         type: "public-key",
         response: {
           clientDataJSON: b64u(clientData),
-          attestationObject: b64u(cbor({ fmt: "none", attStmt: {}, authData })),
-          transports: ["internal"],
+          attestationObject: b64u(
+            ko.fmt === "packed"
+              ? cbor({
+                  fmt: "packed",
+                  attStmt: { alg: -7, sig: sign("sha256", Buffer.concat([authData, sha(clientData)]), privateKey) },
+                  authData,
+                })
+              : cbor({ fmt: "none", attStmt: {}, authData }),
+          ),
+          transports: ko.fmt === "packed" ? ["usb"] : ["internal"],
         },
         clientExtensionResults: {},
-        authenticatorAttachment: "platform",
+        authenticatorAttachment: ko.fmt === "packed" ? "cross-platform" : "platform",
       };
     },
     get(options, o = {}) {

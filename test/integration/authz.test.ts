@@ -1,4 +1,5 @@
 /** Gateway authorisation, API keys and the internal routes (lld/identity.md §6, §8.1). */
+import { OPS_ROLE_SCOPES } from "@nearpay/spec";
 import { toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { getSettlementContext } from "@nearpay-internal/spec";
 import { mintServiceToken } from "@nearpay-internal/testing";
@@ -266,7 +267,7 @@ describe("console sessions (ops principals)", () => {
         last_seen_at: now,
       })
       .execute();
-    const h = fwd("GET", "/v1/account", {
+    const h = fwd("GET", "/ops/merchants", {
       "x-forwarded-host": "ops.nearpay.localhost",
       cookie: `__Host-np_ops=${token}`,
     });
@@ -274,8 +275,13 @@ describe("console sessions (ops principals)", () => {
     expect(claimsOf(r.headers["x-nearpay-token"] as string)).toMatchObject({
       sub: u.userId,
       ptype: "ops",
-      scp: ["compliance.kyb.decide", "compliance.cases.write", "sentinel.killswitch", "rails.read", "payments.read"],
+      ops_role: "ops",
+      scp: [...OPS_ROLE_SCOPES.ops],
     });
+    expect(claimsOf(r.headers["x-nearpay-token"] as string)).not.toHaveProperty("acct");
+    // the console host serves console routes only, and console routes only there
+    expect((await authz({ ...h, "x-forwarded-uri": "/v1/account" })).status).toBe(403);
+    expect((await authz({ ...h, "x-forwarded-host": "dashboard.nearpay.localhost" })).status).toBe(403);
     // a dashboard cookie is not a console session
     expect((await authz({ ...h, cookie: u.cookie.replace("__Host-np_session", "__Host-np_ops") })).status).toBe(401);
     await s.admin.db

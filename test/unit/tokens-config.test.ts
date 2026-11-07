@@ -36,7 +36,7 @@ describe("signing keys", () => {
     expect(sp).toMatchObject({
       sub: "identity",
       ptype: "service",
-      scp: ["compliance.screen", "rails.read", "notify.send"],
+      scp: ["compliance.screen", "rails.read", "notify.send", "compliance.read"],
     });
   });
   it("a missing key file fails startup", () => {

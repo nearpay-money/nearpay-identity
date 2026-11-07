@@ -82,3 +82,64 @@ function parseIp(s: string): { v: 4 | 6; n: bigint } | null {
   if (groups.length !== 8 || groups.some((g) => !/^[0-9a-f]{1,4}$/i.test(g))) return null;
   return { v: 6, n: groups.reduce((acc, g) => (acc << 16n) | BigInt(Number.parseInt(g, 16)), 0n) };
 }
+
+// ---- restricted keys (Stage 2, lld/identity.md §6) ---------------------------------------------
+
+/** `<resource>.read|write` scopes of the spec catalogue (`KEY_SCOPES`), passed in to keep this module pure. */
+export type ScopeCatalogue = readonly string[];
+
+export type ScopeCheck =
+  | { readonly ok: true; readonly scopes: string[] }
+  | {
+      readonly ok: false;
+      readonly error: "scope_unknown" | "invalid_request";
+      readonly scope?: string;
+      readonly reason: string;
+    };
+
+/**
+ * Validates the scopes of a key being created or updated: restricted keys need ≥ 1 scope from the
+ * catalogue (stored de-duplicated and sorted); secret and publishable keys take none.
+ */
+export function checkScopes(
+  type: KeyType,
+  scopes: readonly string[] | undefined,
+  catalogue: ScopeCatalogue,
+): ScopeCheck {
+  if (type !== "restricted") {
+    if (scopes !== undefined && scopes.length > 0)
+      return { ok: false, error: "invalid_request", reason: "only restricted keys take scopes" };
+    return { ok: true, scopes: [] };
+  }
+  if (!scopes || scopes.length === 0)
+    return { ok: false, error: "invalid_request", reason: "restricted keys need at least one scope" };
+  const unknown = scopes.find((s) => !catalogue.includes(s));
+  if (unknown !== undefined) return { ok: false, error: "scope_unknown", scope: unknown, reason: "unknown scope" };
+  return { ok: true, scopes: [...new Set(scopes)].sort() };
+}
+
+/**
+ * Scopes a restricted key holds at the gateway: its own, plus `<resource>.read` for every
+ * `<resource>.write` (write implies read). Only catalogue scopes survive (a stale stored scope that
+ * left the catalogue grants nothing).
+ */
+export function expandScopes(scopes: readonly string[], catalogue: ScopeCatalogue): string[] {
+  const out = new Set<string>();
+  for (const s of scopes) {
+    if (!catalogue.includes(s)) continue;
+    out.add(s);
+    if (s.endsWith(".write")) {
+      const read = `${s.slice(0, -".write".length)}.read`;
+      if (catalogue.includes(read)) out.add(read);
+    }
+  }
+  return [...out].sort();
+}
+
+/**
+ * Whether a restricted key with `held` (expanded) scopes may call a route with `auth` entries — the
+ * same rule `@nearpay-internal/service` applies (`restricted_key:<scope>`), checked early at the gateway.
+ */
+export function restrictedAllows(auth: readonly string[], held: readonly string[]): boolean {
+  return auth.some((a) => a.startsWith("restricted_key:") && held.includes(a.slice("restricted_key:".length)));
+}

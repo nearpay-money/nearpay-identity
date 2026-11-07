@@ -1,5 +1,6 @@
 /** The Stage 1 identity ops CLI (platform §3) against Postgres with spec-mocked peers. */
 import { toUuid } from "@nearpay-internal/ids";
+import { sendMessage } from "@nearpay-internal/spec";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runOps, USAGE } from "../../src/ops/cli.js";
 import { nearSigner } from "../support/signers.js";
@@ -60,7 +61,16 @@ describe("ops CLI", () => {
       .executeTakeFirstOrThrow();
     expect(row.role).toBe("ops_admin");
     expect((await ops("operator-revoke", "op@nearpay.test")).json).toMatchObject({ revoked: true });
-    expect((await ops("operator-add", "nobody@nearpay.test", "ops")).code).toBe(1);
+    // Stage 2: an operator needs no merchant account; the user is created and an enrolment link mailed
+    const fresh = await ops("operator-add", "nobody@nearpay.test", "ops");
+    expect(fresh.code, fresh.err).toBe(0);
+    const mail = s.notify
+      .callsTo(sendMessage)
+      .map((c) => c.body as { template: string; to: string; variables: { link_url: string; role: string } })
+      .filter((m) => m.template === "ops.enrolment" && m.to === "nobody@nearpay.test");
+    expect(mail).toHaveLength(1);
+    expect(mail[0]?.variables.link_url).toMatch(/^https:\/\/ops\.nearpay\.localhost\/auth\/enrol#token=/);
+    expect((await ops("operator-add", "not-an-email", "ops")).code).toBe(2);
   });
 
   it("destination-cooloff-skip activates a cooling-off destination now (local only)", async () => {

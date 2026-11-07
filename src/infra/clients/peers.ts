@@ -9,6 +9,7 @@ import {
   createScreening,
   getDestinationMinimums,
   getInternalAsset,
+  getInternalKybCase,
   listChainProfiles,
   sendMessage,
 } from "@nearpay-internal/spec";
@@ -17,6 +18,7 @@ export type Screening = RouteResponse<typeof createScreening>;
 export type Asset = RouteResponse<typeof getInternalAsset>;
 export type ChainProfiles = RouteResponse<typeof listChainProfiles>;
 export type Minimums = RouteResponse<typeof getDestinationMinimums>;
+export type KybCase = RouteResponse<typeof getInternalKybCase>;
 
 export interface Peers {
   screen(input: {
@@ -38,6 +40,25 @@ export interface Peers {
     expires_in_minutes: number;
     dedupe_key: string;
   }): Promise<void>;
+  /** Stage 2: notify `team.invitation` (the link carries the single-use token in its fragment). */
+  sendInvitation(m: {
+    to: string;
+    link_url: string;
+    account_display_name: string;
+    role: "owner" | "admin" | "developer" | "finance" | "support" | "viewer";
+    expires_in_minutes: number;
+    dedupe_key: string;
+  }): Promise<void>;
+  /** Stage 2: notify `ops.enrolment` (operator-add). */
+  sendOpsEnrolment(m: {
+    to: string;
+    link_url: string;
+    role: "ops" | "ops_admin";
+    expires_in_minutes: number;
+    dedupe_key: string;
+  }): Promise<void>;
+  /** Stage 2: the account's KYB case with the self-declared details (compliance `getInternalKybCase`). */
+  kybCase(accountId: string): Promise<KybCase>;
 }
 
 export function httpPeers(o: {
@@ -79,5 +100,31 @@ export function httpPeers(o: {
         },
       });
     },
+    async sendInvitation(m) {
+      await notify.call(sendMessage, {
+        body: {
+          template: "team.invitation",
+          to: m.to,
+          variables: {
+            link_url: m.link_url,
+            account_display_name: m.account_display_name,
+            role: m.role,
+            expires_in_minutes: m.expires_in_minutes,
+          },
+          dedupe_key: m.dedupe_key,
+        },
+      });
+    },
+    async sendOpsEnrolment(m) {
+      await notify.call(sendMessage, {
+        body: {
+          template: "ops.enrolment",
+          to: m.to,
+          variables: { link_url: m.link_url, role: m.role, expires_in_minutes: m.expires_in_minutes },
+          dedupe_key: m.dedupe_key,
+        },
+      });
+    },
+    kybCase: (accountId) => compliance.call(getInternalKybCase, { params: { id: accountId as `acct_${string}` } }),
   };
 }

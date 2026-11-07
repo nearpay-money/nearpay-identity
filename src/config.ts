@@ -1,6 +1,8 @@
 /** Configuration (lld/identity.md §11, foundations §13). */
+import { readFileSync } from "node:fs";
 import { baseConfigShape, list, loadConfig, secret, url } from "@nearpay-internal/service";
 import { z } from "zod";
+import type { ConsoleConfig } from "./app/context.js";
 
 const shared = {
   ...baseConfigShape,
@@ -34,6 +36,12 @@ export const apiShape = {
   railsUrl: url(["http:", "https:"]),
   notifyUrl: url(["http:", "https:"]),
   nearRpcUrls: list(url(["https:", "http:"])),
+  /** Console origin (`https://ops.nearpay.money`): WebAuthn origin (RP id = its host) of operator passkeys. */
+  opsOrigin: url(["https:", "http:"]).optional(),
+  /** One AAGUID per line (`#` comments): hardware security keys accepted for operator passkeys. */
+  opsAaguidAllowlistFile: z.string().min(1).optional(),
+  /** PEM bundle of attestation roots (vendor CAs) operator-key attestations must chain to; required on the server stage. */
+  opsAttestationRootsFile: z.string().min(1).optional(),
   /** `{"<chain id>": ["https://…"]}` for ERC-1271 contract-wallet attestations (optional). */
   evmRpcUrls: z
     .string()
@@ -65,6 +73,8 @@ export const opsShape = {
   railsUrl: url(["http:", "https:"]).default("http://rails-api:8080"),
   notifyUrl: url(["http:", "https:"]).default("http://notify-api:8080"),
   opsActor: z.string().min(1).max(100).optional(),
+  /** Console origin for enrolment links (`<origin>/auth/enrol#token=…`). */
+  opsOrigin: url(["https:", "http:"]).optional(),
 };
 
 export const migrateShape = { ...baseConfigShape, dbUrl: secret(url(["postgres:", "postgresql:"])) };
@@ -77,6 +87,49 @@ export type OpsConfig = z.output<z.ZodObject<typeof opsShape>>;
 export function checkCooloff(c: { env: string; cooloffSeconds: number }): void {
   if (c.cooloffSeconds === 0 && c.env !== "local" && c.env !== "test")
     throw new Error("NP_COOLOFF_SECONDS=0 is allowed only when NP_ENV=local");
+}
+
+/**
+ * AAGUIDs of software/virtual authenticators (the Chrome DevTools virtual authenticator, the all-zero
+ * AAGUID of self-attesting keys): accepted from the allow-list only when NP_ENV is `local` or `test`.
+ */
+export const VIRTUAL_AAGUIDS = new Set([
+  "00000000-0000-0000-0000-000000000000",
+  "01020304-0506-0708-0102-030405060708",
+]);
+
+/** Parses the AAGUID allow-list (one per line, `#` comments, case-insensitive). */
+export function parseAaguids(text: string, env: string): Set<string> {
+  const out = new Set<string>();
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/#.*/, "").trim().toLowerCase();
+    if (!line) continue;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(line))
+      throw new Error(`NP_OPS_AAGUID_ALLOWLIST: not an AAGUID: ${line.slice(0, 40)}`);
+    if (VIRTUAL_AAGUIDS.has(line) && env !== "local" && env !== "test") continue;
+    out.add(line);
+  }
+  return out;
+}
+
+/** PEM certificates of a bundle. */
+export function parsePemBundle(text: string): string[] {
+  return [...text.matchAll(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g)].map((m) => `${m[0]}\n`);
+}
+
+export function consoleConfig(c: {
+  env: string;
+  opsOrigin?: string | undefined;
+  opsAaguidAllowlistFile?: string | undefined;
+  opsAttestationRootsFile?: string | undefined;
+}): ConsoleConfig {
+  const origin = c.opsOrigin ? c.opsOrigin.replace(/\/$/, "") : null;
+  return {
+    origin,
+    rpId: origin ? new URL(origin).hostname : null,
+    aaguids: c.opsAaguidAllowlistFile ? parseAaguids(readFileSync(c.opsAaguidAllowlistFile, "utf8"), c.env) : new Set(),
+    attestationRoots: c.opsAttestationRootsFile ? parsePemBundle(readFileSync(c.opsAttestationRootsFile, "utf8")) : [],
+  };
 }
 
 export const readApiConfig = () => {

@@ -102,6 +102,9 @@ export function clientIp(
 /** `NearPay-Mode` header → livemode for session principals (default test). */
 export const sessionMode = (header: string | undefined) => header?.trim().toLowerCase() === "live";
 
+/** Console routes live under `/ops/` (spec visibility `ops`). */
+export const isConsolePath = (uri: string | undefined) => (uri ?? "/").split("?")[0]?.startsWith("/ops/") ?? false;
+
 /** The console is served on `ops.<domain>`; its sessions are ops principals (L-ID-04). */
 export const isConsoleHost = (host: string | undefined) =>
   (host ?? "").toLowerCase().split(":")[0]?.startsWith("ops.") ?? false;

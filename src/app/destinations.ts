@@ -15,7 +15,9 @@ import { HttpError } from "@nearpay-internal/http";
 import { fromUuid, toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { ApiError } from "@nearpay-internal/service";
 import type { Subject } from "@nearpay-internal/spec";
+import { afterAttestation, type Decision, decide } from "../domain/approval/approval.js";
 import {
+  approvalsRequired,
   attestationMessage,
   CHALLENGE_TTL_MS,
   NEP413_RECIPIENT,
@@ -28,11 +30,17 @@ import { AttestationUnavailable, verifyAttestation } from "../infra/crypto/attes
 import type { DestinationStatus } from "../infra/db/schema.js";
 import { refreshLiveEnabled } from "./accounts.js";
 import { type Actor, audit, dbNow, emitEvent, type Identity, type Tx } from "./context.js";
-import { type DestinationRow, destinationView, fingerprintOf, internalDestinationView } from "./views.js";
+import {
+  type ApprovalRow,
+  type DestinationRow,
+  destinationView,
+  fingerprintOf,
+  internalDestinationView,
+} from "./views.js";
 
 export const ACTIVATE_JOB = "destination.activate";
 
-type DestinationEvent = "created" | "cooling_off" | "activated" | "disabled" | "default_changed";
+type DestinationEvent = "created" | "pending_approval" | "cooling_off" | "activated" | "disabled" | "default_changed";
 
 // ---------------------------------------------------------------------------------------------
 // Reads
@@ -50,6 +58,24 @@ async function defaultsOf(db: Identity["db"] | Tx, accountUuid: string, livemode
 
 const isDefaultIn = (defs: { destination_id: string }[], d: DestinationRow) =>
   defs.some((x) => x.destination_id === d.id);
+
+/** Approval rows per destination, oldest first (two-approver rule, §5). */
+async function approvalsOf(db: Identity["db"] | Tx, ids: readonly string[]): Promise<Map<string, ApprovalRow[]>> {
+  const out = new Map<string, ApprovalRow[]>(ids.map((i) => [i, []]));
+  if (!ids.length) return out;
+  const rows = await db
+    .selectFrom("destination_approvals")
+    .select(["destination_id", "user_id", "decision"])
+    .where("destination_id", "in", [...ids])
+    .orderBy("created_at")
+    .orderBy("user_id")
+    .execute();
+  for (const r of rows) out.get(r.destination_id)?.push({ user_id: r.user_id, decision: r.decision });
+  return out;
+}
+
+const approvalsFor = async (db: Identity["db"] | Tx, d: DestinationRow) =>
+  (await approvalsOf(db, [d.id])).get(d.id) ?? [];
 
 /** Rails minimums for active destinations (cached 1 h; unavailable → null, §10). */
 async function minimumsFor(id: Identity, rows: DestinationRow[]): Promise<Map<string, number | null>> {
@@ -104,11 +130,22 @@ export async function listDestinations(
   if (q.ending_before) query = query.where("id", ">", toUuid(q.ending_before, "sd"));
   const rows = await query.execute();
   const page = rows.slice(0, q.limit);
-  const [defs, mins] = await Promise.all([defaultsOf(id.db, acct, livemode), minimumsFor(id, page)]);
+  const [defs, mins, approvals] = await Promise.all([
+    defaultsOf(id.db, acct, livemode),
+    minimumsFor(id, page),
+    approvalsOf(
+      id.db,
+      page.map((d) => d.id),
+    ),
+  ]);
   return {
     object: "list" as const,
     data: page.map((d) =>
-      destinationView(d, { isDefault: isDefaultIn(defs, d), minUsdMicros: mins.get(d.id) ?? null }),
+      destinationView(d, {
+        isDefault: isDefaultIn(defs, d),
+        minUsdMicros: mins.get(d.id) ?? null,
+        approvals: approvals.get(d.id) ?? [],
+      }),
     ),
     has_more: rows.length > q.limit,
     url: "/v1/settlement_destinations",
@@ -136,8 +173,12 @@ async function loadOwn(
 
 export async function getDestination(id: Identity, accountId: string, livemode: boolean, destinationId: string) {
   const d = await loadOwn(id.db, accountId, livemode, destinationId);
-  const [defs, mins] = await Promise.all([defaultsOf(id.db, d.account_id, d.livemode), minimumsFor(id, [d])]);
-  return destinationView(d, { isDefault: isDefaultIn(defs, d), minUsdMicros: mins.get(d.id) ?? null });
+  const [defs, mins, approvals] = await Promise.all([
+    defaultsOf(id.db, d.account_id, d.livemode),
+    minimumsFor(id, [d]),
+    approvalsFor(id.db, d),
+  ]);
+  return destinationView(d, { isDefault: isDefaultIn(defs, d), minUsdMicros: mins.get(d.id) ?? null, approvals });
 }
 
 /** `GET /internal/settlement-destinations/{id}` (any status, any account). */
@@ -149,7 +190,11 @@ export async function getInternalDestination(id: Identity, destinationId: string
     .executeTakeFirst();
   if (!d) throw ApiError.missing("settlement_destination", destinationId, "id");
   const defs = await defaultsOf(id.db, d.account_id, d.livemode);
-  return internalDestinationView(d, { isDefault: isDefaultIn(defs, d), minUsdMicros: null });
+  return internalDestinationView(d, {
+    isDefault: isDefaultIn(defs, d),
+    minUsdMicros: null,
+    approvals: await approvalsFor(id.db, d),
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -171,20 +216,28 @@ async function record(
   > = {},
 ): Promise<DestinationRow> {
   const now = await dbNow(tx);
-  const updated = await tx
-    .updateTable("settlement_destinations")
-    .set({
-      status: to,
-      ...set,
-      attestation:
-        set.attestation === undefined ? undefined : set.attestation === null ? null : JSON.stringify(set.attestation),
-      updated_at: now,
-      version: d.version + 1,
-    } as never)
-    .where("id", "=", d.id)
-    .where("version", "=", d.version)
-    .returningAll()
-    .executeTakeFirstOrThrow();
+  let updated: DestinationRow;
+  try {
+    updated = await tx
+      .updateTable("settlement_destinations")
+      .set({
+        status: to,
+        ...set,
+        attestation:
+          set.attestation === undefined ? undefined : set.attestation === null ? null : JSON.stringify(set.attestation),
+        updated_at: now,
+        version: d.version + 1,
+      } as never)
+      .where("id", "=", d.id)
+      .where("version", "=", d.version)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+  } catch (e) {
+    // the database's two-approver check (migration 0004) caught a transition without enough approvers
+    if ((e as { constraint?: string }).constraint === "destination_approvals_complete")
+      throw new ApiError("approver_conflict", { params: { reason: "a second owner or admin must approve it" } });
+    throw e;
+  }
   await tx
     .insertInto("settlement_destination_transitions")
     .values({ id: uuidv7(), destination_id: d.id, from_state: d.status, to_state: to, cause, actor })
@@ -200,7 +253,11 @@ async function emitDestination(tx: Tx, d: DestinationRow, event: DestinationEven
     aggregate: { type: "settlement_destination", id: fromUuid("sd", d.id), version: d.version },
     accountUuid: d.account_id,
     livemode: d.livemode,
-    object: internalDestinationView(d, { isDefault: isDefaultIn(defs, d), minUsdMicros: null }),
+    object: internalDestinationView(d, {
+      isDefault: isDefaultIn(defs, d),
+      minUsdMicros: null,
+      approvals: await approvalsFor(tx, d),
+    }),
     ...(previous ? { previous } : {}),
   });
 }
@@ -343,6 +400,21 @@ export async function createDestination(
         .executeTakeFirst();
       if (dup) throw new ApiError("destination_in_use");
     }
+    // two-approver rule (§5): fixed at creation from the owners/admins of the account now
+    const managers = livemode
+      ? Number(
+          (
+            await tx
+              .selectFrom("memberships")
+              .innerJoin("users", "users.id", "memberships.user_id")
+              .select((eb) => eb.fn.countAll<string>().as("n"))
+              .where("memberships.account_id", "=", acct)
+              .where("memberships.role", "in", ["owner", "admin"])
+              .where("users.status", "=", "active")
+              .executeTakeFirstOrThrow()
+          ).n,
+        )
+      : 0;
     const created = await tx
       .insertInto("settlement_destinations")
       .values({
@@ -359,9 +431,16 @@ export async function createDestination(
         verification: livemode ? "signature" : "test",
         screening_id: screening.screening_id,
         created_by: actor.userUuid,
+        approvals_required: livemode ? approvalsRequired(managers, true) : 1,
       })
       .returningAll()
       .executeTakeFirstOrThrow();
+    // the creator's creation is the first approval: the (destination, user) key refuses them a second one
+    if (livemode)
+      await tx
+        .insertInto("destination_approvals")
+        .values({ destination_id: created.id, user_id: actor.userUuid, decision: "approve" })
+        .execute();
     await tx
       .insertInto("settlement_destination_transitions")
       .values({
@@ -379,18 +458,19 @@ export async function createDestination(
       actor,
       action: "destination.created",
       target: { type: "settlement_destination", id: fromUuid("sd", created.id) },
-      details: { chain: b.chain, asset_id: b.asset_id, livemode },
+      details: { chain: b.chain, asset_id: b.asset_id, livemode, approvals_required: created.approvals_required },
     });
 
     if (!livemode) {
       const active = await becomeActive(id, tx, created, "test_mode", actor.id, {});
       const defs = await defaultsOf(tx, acct, false);
-      return destinationView(active, { isDefault: isDefaultIn(defs, active), minUsdMicros: null });
+      return destinationView(active, { isDefault: isDefaultIn(defs, active), minUsdMicros: null, approvals: [] });
     }
 
     return destinationView(created, {
       isDefault: false,
       minUsdMicros: null,
+      approvals: await approvalsFor(tx, created),
       challenge: await issueChallenge(tx, accountId, created, standard),
     });
   });
@@ -467,7 +547,12 @@ export async function challengeDestination(
       target: { type: "settlement_destination", id: destinationId },
       details: { challenge: challenge.id, superseded: Number(superseded.numUpdatedRows) },
     });
-    return destinationView(d, { isDefault: false, minUsdMicros: null, challenge });
+    return destinationView(d, {
+      isDefault: false,
+      minUsdMicros: null,
+      approvals: await approvalsFor(tx, d),
+      challenge,
+    });
   });
 }
 
@@ -538,6 +623,12 @@ export async function attestDestination(
       .executeTakeFirst();
     if (Number(used.numUpdatedRows) !== 1) throw new ApiError("challenge_expired");
     const now = await dbNow(tx);
+    const approvals = await approvalsFor(tx, d);
+    // two approvers required and only the creator so far: wait for the second owner/admin
+    const to = afterAttestation(
+      d.approvals_required,
+      approvals.map((a) => ({ userId: a.user_id, decision: a.decision })),
+    );
     const activeAt = new Date(now.getTime() + id.cooloffMs);
     const attestation = {
       standard: b.standard,
@@ -548,29 +639,124 @@ export async function attestDestination(
       method: result.method,
     };
     // a concurrent attestation of the same address by another account loses on the unique index
-    let cooling: DestinationRow;
+    let next: DestinationRow;
     try {
-      cooling = await record(id, tx, d, s.to, "attested", actor.id, { attestation, active_at: activeAt });
+      next = await record(id, tx, d, to, "attested", actor.id, {
+        attestation,
+        ...(to === "cooling_off" ? { active_at: activeAt } : {}),
+      });
     } catch (e) {
       if ((e as { code?: string }).code === "23505") throw new ApiError("destination_in_use");
       throw e;
     }
-    await emitDestination(tx, cooling, "cooling_off");
-    await enqueueJob(tx, {
-      kind: ACTIVATE_JOB,
-      payload: { destination_id: d.id },
-      runAt: activeAt,
-      dedupeKey: `${ACTIVATE_JOB}:sd:${d.id}`,
-      maxAttempts: 50,
-    });
+    if (to === "cooling_off") await startCooloff(tx, next, activeAt);
+    else await emitDestination(tx, next, "pending_approval");
     await audit(id, tx, {
       accountUuid: d.account_id,
       actor,
       action: "destination.attested",
       target: { type: "settlement_destination", id: destinationId },
-      details: { standard: b.standard, method: result.method, active_at: activeAt.toISOString() },
+      details: {
+        standard: b.standard,
+        method: result.method,
+        ...(to === "cooling_off" ? { active_at: activeAt.toISOString() } : { awaiting_approval: true }),
+      },
     });
-    return destinationView(cooling, { isDefault: false, minUsdMicros: null });
+    return destinationView(next, { isDefault: false, minUsdMicros: null, approvals });
+  });
+}
+
+/** Cool-off start (after attestation or the last approval): event, then the activation job at `active_at`. */
+async function startCooloff(tx: Tx, d: DestinationRow, activeAt: Date) {
+  await emitDestination(tx, d, "cooling_off");
+  await enqueueJob(tx, {
+    kind: ACTIVATE_JOB,
+    payload: { destination_id: d.id },
+    runAt: activeAt,
+    dedupeKey: `${ACTIVATE_JOB}:sd:${d.id}`,
+    maxAttempts: 50,
+  });
+}
+
+/**
+ * `POST /v1/settlement_destinations/{id}/approve` (spec 0.2.0, §5 two-approver rule). Checked on the
+ * session's user id: the approver must be a current owner/admin other than the creator and every
+ * earlier approver (`403 approver_conflict`, repeated by the approvals primary key and the
+ * `destination_approvals_complete` trigger). The last approval starts the cool-off (job at
+ * `active_at`); a rejection disables the destination (`merchant`). Only `pending_approval`.
+ */
+export async function approveDestination(
+  id: Identity,
+  accountId: string,
+  livemode: boolean,
+  destinationId: string,
+  decision: Decision,
+  actor: Actor & { userUuid: string },
+) {
+  return withTx(id.db, async (tx) => {
+    const d = await loadOwn(tx, accountId, livemode, destinationId, true);
+    // the role in the request token may be up to 10 s old: re-check the membership in this transaction
+    const m = await tx
+      .selectFrom("memberships")
+      .select("role")
+      .where("account_id", "=", d.account_id)
+      .where("user_id", "=", actor.userUuid)
+      .executeTakeFirst();
+    if (m?.role !== "owner" && m?.role !== "admin")
+      throw new ApiError("permission_denied", { params: { action: "approve settlement destinations" } });
+    // an approval is a destination change: refused for 48 h after an account recovery (§12); a reject is not
+    if (decision === "approve") {
+      const a = await tx
+        .selectFrom("accounts")
+        .select("recovered_at")
+        .where("id", "=", d.account_id)
+        .executeTakeFirstOrThrow();
+      if (a.recovered_at && a.recovered_at.getTime() + id.recoveryLockMs > id.now())
+        throw new ApiError("recovery_lock", {
+          params: { until: new Date(a.recovered_at.getTime() + id.recoveryLockMs).toISOString() },
+        });
+    }
+    const approvals = await approvalsFor(tx, d);
+    const out = decide(
+      {
+        status: d.status,
+        required: d.approvals_required,
+        createdBy: d.created_by,
+        approvals: approvals.map((a) => ({ userId: a.user_id, decision: a.decision })),
+      },
+      actor.userUuid,
+      decision,
+    );
+    if (!out.ok) {
+      if (out.error === "state_conflict")
+        throw new ApiError("state_conflict", { params: { object: "settlement_destination", state: d.status } });
+      throw new ApiError("approver_conflict", { params: { reason: out.reason } });
+    }
+    try {
+      await tx
+        .insertInto("destination_approvals")
+        .values({ destination_id: d.id, user_id: actor.userUuid, decision })
+        .execute();
+    } catch (e) {
+      if ((e as { code?: string }).code === "23505")
+        throw new ApiError("approver_conflict", { params: { reason: "this user already decided on the destination" } });
+      throw e;
+    }
+    let next = d;
+    if (out.to === "disabled") next = await disableRow(id, tx, d, "merchant", actor.id);
+    else if (out.to === "cooling_off") {
+      const activeAt = new Date((await dbNow(tx)).getTime() + id.cooloffMs);
+      next = await record(id, tx, d, "cooling_off", "approved", actor.id, { active_at: activeAt });
+      await startCooloff(tx, next, activeAt);
+    }
+    await audit(id, tx, {
+      accountUuid: d.account_id,
+      actor,
+      action: decision === "approve" ? "destination.approved" : "destination.rejected",
+      target: { type: "settlement_destination", id: destinationId },
+      details: { status: next.status, approvals_required: d.approvals_required },
+    });
+    return destinationView(next, { isDefault: false, minUsdMicros: null, approvals: await approvalsFor(tx, next) });
   });
 }
 
@@ -659,7 +845,7 @@ export async function disableDestination(
       action: "destination.disabled",
       target: { type: "settlement_destination", id: destinationId },
     });
-    return destinationView(disabled, { isDefault: false, minUsdMicros: null });
+    return destinationView(disabled, { isDefault: false, minUsdMicros: null, approvals: await approvalsFor(tx, d) });
   });
 }
 
@@ -731,7 +917,7 @@ export async function setDefaultDestination(
         details: { scope },
       });
     }
-    return destinationView(d, { isDefault: true, minUsdMicros: null });
+    return destinationView(d, { isDefault: true, minUsdMicros: null, approvals: await approvalsFor(tx, d) });
   });
 }
 

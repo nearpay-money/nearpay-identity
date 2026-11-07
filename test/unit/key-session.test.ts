@@ -39,9 +39,9 @@ describe("API keys", () => {
   it("rejects malformed keys", () => {
     for (const bad of [
       "sk_live_short",
-      "xk_live_" + "a".repeat(48),
-      "sk_prod_" + "a".repeat(48),
-      "sk_live_" + "a".repeat(47) + "!",
+      `xk_live_${"a".repeat(48)}`,
+      `sk_prod_${"a".repeat(48)}`,
+      `sk_live_${"a".repeat(47)}!`,
       "",
     ])
       expect(parseKey(bad)).toBeNull();

@@ -17,6 +17,7 @@ import {
   createScreening,
   getDestinationMinimums,
   getInternalAsset,
+  getInternalKybCase,
   INTERNAL_ROUTES,
   listChainProfiles,
   sendMessage,
@@ -49,6 +50,10 @@ export const ORIGIN = "https://dashboard.nearpay.localhost";
 export const USDC_NEAR = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
 export const USDC_BASE = "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near";
 export const PAYMENTS_CLIENT_SECRET = "payments-client-secret-for-tests";
+export const OPS_ORIGIN = "https://ops.nearpay.localhost";
+export const OPS_HOST = "ops.nearpay.localhost";
+/** AAGUID of the test "hardware key" (YubiKey 5 series); the only allow-listed model in tests. */
+export const TEST_AAGUID = "cb69481e-8ff7-4039-93ec-0a2729a154a8";
 
 export interface GatewayRequest {
   cookie?: string;
@@ -159,6 +164,21 @@ function defaultMocks(compliance: MockPeer, rails: MockPeer, notify: MockPeer) {
     ),
   );
   notify.on(sendMessage, async () => ({ message_id: `msg_${"0".repeat(26)}` as `msg_${string}` }));
+  compliance.on(getInternalKybCase, async (ctx) => ({
+    account_id: ctx.params.id,
+    status: "approved" as const,
+    profile: {
+      legal_name: "Acme Trading GmbH",
+      country_of_incorporation: "DE",
+      registration_number: "HRB 12345",
+      business_type: null,
+      website: null,
+      business_address: null,
+      representative: null,
+      expected_monthly_volume: null,
+    },
+    decided_at: new Date().toISOString(),
+  }));
 }
 
 export async function startStack(o: StackOptions = {}): Promise<Stack> {
@@ -205,7 +225,7 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
   const apiDb = createDb<DB>({ url: appUrl, applicationName: "identity-api-test" });
   const base = {
     env: "test" as const,
-    logLevel: "silent" as const,
+    logLevel: (process.env.NP_TEST_LOG ?? "silent") as "silent",
     host: "127.0.0.1",
     port: 0,
     metricsPort: 0,
@@ -232,6 +252,7 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
   };
   const apiCache = createAuthzCache({ valkeyUrl: valkey.url });
   const { service: api, identity } = createApi(apiConfig, {
+    console: { origin: OPS_ORIGIN, rpId: OPS_HOST, aaguids: new Set([TEST_AAGUID]), attestationRoots: [] },
     database: apiDb,
     signer,
     peers,
