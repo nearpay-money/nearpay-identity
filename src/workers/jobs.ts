@@ -4,7 +4,7 @@
  * | kind                 | when                     | what                                                  |
  * |----------------------|--------------------------|-------------------------------------------------------|
  * | destination.activate | at `active_at` (per sd)  | re-screen, activate (or disable on block; retry when screening is down) |
- * | purge.auth           | hourly                   | expired magic links, registration tokens, challenges, sessions |
+ * | purge.auth           | hourly                   | expired magic links, registration tokens, challenges, sessions; marks invitations expired |
  * | kit.purge            | hourly                   | published outbox, old inbox, expired idempotency keys  |
  *
  * JWT key rotation (`keys.rotate_jwt`) is an operator action in Stage 1: both mounted keys are
@@ -31,6 +31,9 @@ export async function purgeAuth(id: Identity) {
       sql`delete from attestation_challenges where expires_at < now() - interval '30 days' and used_at is null`,
     ),
     sessions: await one(sql`delete from sessions where expires_at < now() - interval '30 days'`),
+    invitations_expired: await one(
+      sql`update invitations set status = 'expired' where status = 'pending' and expires_at <= now()`,
+    ),
   };
 }
 

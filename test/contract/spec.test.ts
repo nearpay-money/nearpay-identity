@@ -18,7 +18,7 @@ import {
 import { unhandledSubjects } from "@nearpay-internal/bus";
 import { sql } from "@nearpay-internal/db";
 import { unimplementedRoutes } from "@nearpay-internal/service";
-import { INTERNAL_ROUTES, SUBJECTS, type Subject } from "@nearpay-internal/spec";
+import { INTERNAL_ROUTES, OPS_ROUTES, SUBJECTS, type Subject } from "@nearpay-internal/spec";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { identityRoutes } from "../../src/api/routes.js";
 import { identityHandlers } from "../../src/consumers/handlers.js";
@@ -27,18 +27,30 @@ import { type Stack, startStack } from "../support/stack.js";
 const ALL = [...PUBLIC_ROUTES, ...INTERNAL_ROUTES];
 
 describe("routes and events", () => {
-  it("binds every Stage-1 identity route, and nothing else", () => {
+  it("binds every Stage-1 and Stage-2 identity route (incl. console routes), and nothing else", () => {
     const bindings = identityRoutes({} as never, { touches: {} as never, serviceClients: new Map() });
     expect(unimplementedRoutes("identity", ALL, bindings).map((r) => r.id)).toEqual([]);
     expect(bindings.map((b) => b.route.id).sort()).toEqual(
-      ALL.filter((r) => r.service === "identity" && r.stage <= 1)
+      ALL.filter((r) => r.service === "identity" && r.stage <= 2)
         .map((r) => r.id)
         .sort(),
     );
   });
 
-  it("is built against spec 0.1.5: the session read and the challenge re-issue, as the spec defines them", () => {
-    expect(SPEC_VERSION).toBe("0.1.5");
+  it("binds every console route identity serves, with ops roles", () => {
+    const bound = new Set(
+      identityRoutes({} as never, { touches: {} as never, serviceClients: new Map() }).map((b) => b.route.id),
+    );
+    const mine = OPS_ROUTES.filter((r) => r.service === "identity");
+    expect(mine.length).toBeGreaterThanOrEqual(12);
+    for (const r of mine) {
+      expect(bound.has(r.id), r.id).toBe(true);
+      if (!r.auth.includes("anonymous")) expect(r.opsRoles).toEqual(["ops", "ops_admin"]);
+    }
+  });
+
+  it("is built against spec 0.2.0; Stage 1 routes keep their shape", () => {
+    expect(SPEC_VERSION).toBe("0.2.0");
     const bound = identityRoutes({} as never, { touches: {} as never, serviceClients: new Map() }).map(
       (b) => b.route.id,
     );
@@ -72,7 +84,7 @@ describe("routes and events", () => {
 
   it("emits every subject identity produces", () => {
     const produced = (Object.keys(SUBJECTS) as Subject[]).filter(
-      (k) => SUBJECTS[k].producer === "identity" && SUBJECTS[k].stage <= 1,
+      (k) => SUBJECTS[k].producer === "identity" && SUBJECTS[k].stage <= 2,
     );
     const files = (dir: string): string[] =>
       readdirSync(dir).flatMap((f) => (statSync(join(dir, f)).isDirectory() ? files(join(dir, f)) : [join(dir, f)]));
@@ -81,7 +93,7 @@ describe("routes and events", () => {
       .join("\n");
     const literal = new Set(src.match(/evt\.identity\.[a-z_]+\.[a-z_]+/g));
     // settlement_destination.<event> is built from the event name (app/destinations.ts)
-    for (const e of ["created", "cooling_off", "activated", "disabled", "default_changed"])
+    for (const e of ["created", "pending_approval", "cooling_off", "activated", "disabled", "default_changed"])
       literal.add(`evt.identity.settlement_destination.${e}`);
     expect([...literal].filter((x) => produced.includes(x as Subject)).sort()).toEqual([...produced].sort());
   });
@@ -155,6 +167,19 @@ describe("sentinel registry view", () => {
       select column_name, is_nullable from information_schema.columns
       where table_name = 'attestation_challenges' and column_name = 'superseded_at'`.execute(s.admin.db);
     expect(cols.rows).toEqual([{ column_name: "superseded_at", is_nullable: "YES" }]);
+  });
+  it("migration 0004: invitations, ops passkeys, the two-approver trigger and append-only approvals", async () => {
+    const tables = await sql<{ table_name: string }>`
+      select table_name from information_schema.tables where table_name in ('invitations') `.execute(s.admin.db);
+    expect(tables.rows).toHaveLength(1);
+    const triggers = await sql<{ tgname: string }>`
+      select tgname from pg_trigger where tgname in ('destination_approvals_complete', 'destination_approvals_no_update') order by tgname`.execute(
+      s.admin.db,
+    );
+    expect(triggers.rows.map((r) => r.tgname)).toEqual([
+      "destination_approvals_complete",
+      "destination_approvals_no_update",
+    ]);
   });
   it("the audit log is append-only even for the app role", async () => {
     await s.admin.db

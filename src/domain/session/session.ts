@@ -12,6 +12,17 @@ export const OPS_COOKIE = "__Host-np_ops";
 export const SLIDING_MS = 12 * 3_600_000;
 export const ABSOLUTE_MS = 7 * 24 * 3_600_000;
 export const STEP_UP_MS = 10 * 60_000;
+/** Console sessions (spec `OPS_SESSION_TTL_SECONDS`): 30 min idle, 12 h absolute. */
+export const OPS_IDLE_MS = 30 * 60_000;
+export const OPS_ABSOLUTE_MS = 12 * 3_600_000;
+
+export type SessionKind = "dashboard" | "ops";
+
+/** Idle limit and absolute lifetime of a session kind. */
+export const LIFETIME: Readonly<Record<SessionKind, { idleMs: number; absoluteMs: number }>> = {
+  dashboard: { idleMs: SLIDING_MS, absoluteMs: ABSOLUTE_MS },
+  ops: { idleMs: OPS_IDLE_MS, absoluteMs: OPS_ABSOLUTE_MS },
+};
 /** last_seen_at is written at most once a minute (authz is hot). */
 export const TOUCH_EVERY_MS = 60_000;
 
@@ -33,11 +44,20 @@ export interface SessionTimes {
 
 export type SessionState = "valid" | "revoked" | "expired" | "idle";
 
-export function sessionState(s: SessionTimes, now: number): SessionState {
+/**
+ * State of a session at `now`. `expires_at` is the absolute end (creation + the kind's lifetime);
+ * the idle limit depends on the kind (dashboard 12 h sliding, console 30 min).
+ */
+export function sessionState(s: SessionTimes, now: number, kind: SessionKind = "dashboard"): SessionState {
   if (s.revoked_at) return "revoked";
   if (s.expires_at.getTime() <= now) return "expired";
-  if (now - s.last_seen_at.getTime() > SLIDING_MS) return "idle";
+  if (now - s.last_seen_at.getTime() > LIFETIME[kind].idleMs) return "idle";
   return "valid";
+}
+
+/** When an idle session ends: the idle limit after the last activity, never after the absolute end. */
+export function idleExpiresAt(s: Pick<SessionTimes, "expires_at" | "last_seen_at">, kind: SessionKind): Date {
+  return new Date(Math.min(s.last_seen_at.getTime() + LIFETIME[kind].idleMs, s.expires_at.getTime()));
 }
 
 /** Unix seconds until which the step-up is fresh, or undefined. */

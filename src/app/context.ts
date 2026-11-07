@@ -53,6 +53,22 @@ export interface WebAuthnConfig {
   readonly origins: readonly string[];
 }
 
+/**
+ * Console (ops) sign-in (lld/identity.md §6.1, §11): the console origin (enrolment links, WebAuthn
+ * origin; RP id = its host), the hardware-key AAGUID allow-list and the attestation trust anchors.
+ * Missing origin or an empty allow-list refuses every console enrolment (fail closed).
+ */
+export interface ConsoleConfig {
+  readonly origin: string | null;
+  readonly rpId: string | null;
+  /** Lower-case AAGUIDs of accepted hardware security keys. */
+  readonly aaguids: ReadonlySet<string>;
+  /** PEM root certificates attestation chains must lead to (required when NP_ENV=server). */
+  readonly attestationRoots: readonly string[];
+}
+
+export const NO_CONSOLE: ConsoleConfig = { origin: null, rpId: null, aaguids: new Set(), attestationRoots: [] };
+
 /** Everything the use cases need; api and worker build it with the parts they run. */
 export interface Identity {
   readonly env: string;
@@ -66,6 +82,7 @@ export interface Identity {
   readonly recoveryLockMs: number;
   readonly dashboardOrigin: string;
   readonly webauthn: WebAuthnConfig;
+  readonly console: ConsoleConfig;
   readonly lookups: OwnershipLookups;
   readonly turnstile: TurnstileVerifier;
   readonly cache: AuthzCache;
@@ -100,7 +117,7 @@ export function emitEvent(
 }
 
 export interface Actor {
-  readonly type: "user" | "api_key" | "service" | "ops" | "system";
+  readonly type: "user" | "api_key" | "service" | "ops" | "operator" | "system";
   readonly id: string;
   readonly ip?: string | null;
 }

@@ -34,8 +34,9 @@ import {
 } from "@nearpay-internal/db";
 import { type BackgroundTask, createService, type Service } from "@nearpay-internal/service";
 import { STREAMS, type Subject } from "@nearpay-internal/spec";
+import { SettingsService } from "@simplewebauthn/server";
 import { identityRoutes } from "../api/routes.js";
-import type { ApiConfig, WorkerConfig } from "../config.js";
+import { type ApiConfig, consoleConfig, type WorkerConfig } from "../config.js";
 import { CACHE_PURGE_SUBJECT, deadLetters, identityHandlers } from "../consumers/handlers.js";
 import { type AuthzCache, createAuthzCache } from "../infra/cache.js";
 import { chainLookups } from "../infra/clients/chain-rpc.js";
@@ -46,7 +47,7 @@ import { MIGRATIONS_DIR } from "../infra/db/migrations.js";
 import type { DB } from "../infra/db/schema.js";
 import { jobHandlers, RECURRING } from "../workers/jobs.js";
 import { touches } from "./authz.js";
-import { type Identity, identityMetrics } from "./context.js";
+import { type ConsoleConfig, type Identity, identityMetrics, NO_CONSOLE } from "./context.js";
 import { loadServiceClients, loadSigner, type Signer } from "./tokens.js";
 
 export interface ServiceDeps {
@@ -58,6 +59,8 @@ export interface ServiceDeps {
   cache?: AuthzCache;
   /** Verifies request tokens on identity's own routes; default: its own signing keys. */
   keys?: KeySource;
+  /** Console sign-in settings; default: from the configuration files. */
+  console?: ConsoleConfig;
   now?: () => number;
 }
 
@@ -79,7 +82,10 @@ function base(
   database: Database<DB>,
   signer: Signer,
   peers: Peers,
-  extra: Pick<Identity, "lookups" | "turnstile" | "cache" | "dashboardOrigin" | "webauthn" | "recoveryLockMs">,
+  extra: Pick<
+    Identity,
+    "lookups" | "turnstile" | "cache" | "dashboardOrigin" | "webauthn" | "recoveryLockMs" | "console"
+  >,
   now: () => number,
 ): Mutable<Identity> {
   return {
@@ -156,9 +162,14 @@ export function createApi(config: ApiConfig, deps: ServiceDeps = {}): { service:
       dashboardOrigin: config.dashboardOrigin,
       webauthn: { rpId: config.webauthnRpId, rpName: "NearPay", origins: config.webauthnOrigins },
       recoveryLockMs: config.recoveryLockSeconds * 1000,
+      console: deps.console ?? consoleConfig(config),
     },
     deps.now ?? Date.now,
   );
+  // operator-key attestations chain to the configured vendor roots (console.ts checks they exist on the server stage)
+  if (id.console.attestationRoots.length)
+    for (const identifier of ["packed", "fido-u2f", "tpm"] as const)
+      SettingsService.setRootCertificates({ identifier, certificates: [...id.console.attestationRoots] });
   const t = touches(id);
   const service = createService({
     name: "identity",
@@ -216,6 +227,7 @@ export async function createWorker(
       dashboardOrigin: "",
       webauthn: { rpId: "", rpName: "NearPay", origins: [] },
       recoveryLockMs: 0,
+      console: NO_CONSOLE,
     },
     deps.now ?? Date.now,
   );

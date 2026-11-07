@@ -2,31 +2,44 @@
 
 import type { ServiceName } from "@nearpay/spec";
 import {
+  acceptInvitation,
+  approveSettlementDestination,
   attestSettlementDestination,
   challengeSettlementDestination,
   createApiKey,
+  createInvitation,
   createSettlementDestination,
   disableSettlementDestination,
   getAccount,
   getAccountRequirements,
   getDashboardSession,
   getSettlementDestination,
+  listAccountAuditEvents,
   listApiKeys,
+  listInvitations,
+  listMembers,
+  listMemberships,
   listSettlementDestinations,
   logout,
   passkeyAuthenticationOptions,
   passkeyAuthenticationVerify,
   passkeyRegistrationOptions,
   passkeyRegistrationVerify,
+  removeMember,
   revokeApiKey,
+  revokeInvitation,
   rollApiKey,
   SERVICE_CLIENT_SCOPES,
   setDefaultSettlementDestination,
   signup,
+  startRecovery,
   stepUpOptions,
   stepUpVerify,
+  switchSessionAccount,
   TOKEN_TTL_SECONDS,
   updateAccount,
+  updateApiKey,
+  updateMember,
   verifyMagicLink,
 } from "@nearpay/spec";
 import type { InternalClaims } from "@nearpay-internal/auth";
@@ -37,15 +50,30 @@ import {
   getInternalSettlementDestination,
   getJwks,
   getNotificationRecipients,
+  getOpsMerchant,
+  getOpsSession,
   getSettlementContext,
+  listOpsAuditEvents,
+  listOpsMerchants,
   mintServiceToken,
+  opsEnrolmentVerify,
+  opsLogout,
+  opsPasskeyAuthenticationOptions,
+  opsPasskeyAuthenticationVerify,
+  opsPasskeyRegistrationOptions,
+  opsPasskeyRegistrationVerify,
+  opsStepUpOptions,
+  opsStepUpVerify,
 } from "@nearpay-internal/spec";
 import { getRequirements, updateAccount as patchAccount, getAccount as readAccount } from "../app/accounts.js";
-import { createKey, listKeys, revokeKey, rollKey } from "../app/api-keys.js";
+import { createKey, listKeys, revokeKey, rollKey, updateKey } from "../app/api-keys.js";
+import * as audits from "../app/audit.js";
 import * as auth from "../app/auth.js";
 import { authorize, type Touches } from "../app/authz.js";
+import * as consoleAuth from "../app/console.js";
 import type { Actor, Identity } from "../app/context.js";
 import {
+  approveDestination,
   attestDestination,
   challengeDestination,
   createDestination,
@@ -56,6 +84,7 @@ import {
   setDefaultDestination,
 } from "../app/destinations.js";
 import { notificationRecipients, settlementContext } from "../app/internal.js";
+import * as team from "../app/team.js";
 import { authenticateClient } from "../app/tokens.js";
 import { clientIp } from "../domain/authz/authz.js";
 
@@ -86,6 +115,13 @@ function principal(ctx: RequestContext): InternalClaims & { acct: string } {
   const p = ctx.principal;
   if (!p?.acct) throw new ApiError("authentication_required");
   return p as InternalClaims & { acct: string };
+}
+
+/** The ops principal of a console route. */
+function operator(ctx: RequestContext): InternalClaims {
+  const p = ctx.principal;
+  if (p?.ptype !== "ops") throw new ApiError("authentication_required");
+  return p;
 }
 
 function actorOf(id: Identity, ctx: RequestContext): Actor & { userUuid: string } {
@@ -125,6 +161,33 @@ export function identityRoutes(id: Identity, deps: RouteDeps): RouteBinding[] {
       const r = await auth.logout(id, principal(ctx), meta(id, ctx));
       return r as never;
     }),
+    implement(startRecovery, async (ctx) => {
+      await auth.startRecovery(id, ctx.body, meta(id, ctx));
+    }),
+    implement(acceptInvitation, async (ctx) =>
+      team.acceptInvitation(id, principal(ctx), ctx.body.token, meta(id, ctx)),
+    ),
+    implement(listMemberships, async (ctx) => team.listMemberships(id, principal(ctx))),
+    implement(switchSessionAccount, async (ctx) =>
+      team.switchSessionAccount(id, principal(ctx), ctx.body.account, meta(id, ctx)),
+    ),
+
+    // ---- team --------------------------------------------------------------------------------------
+    implement(listMembers, async (ctx) => team.listMembers(id, principal(ctx).acct, ctx.query)),
+    implement(updateMember, async (ctx) =>
+      team.updateMember(id, principal(ctx).acct, ctx.params.user, ctx.body.role, actorOf(id, ctx)),
+    ),
+    implement(removeMember, async (ctx) => {
+      await team.removeMember(id, principal(ctx).acct, ctx.params.user, actorOf(id, ctx));
+    }),
+    implement(listInvitations, async (ctx) => team.listInvitations(id, principal(ctx).acct, ctx.query)),
+    implement(createInvitation, async (ctx) =>
+      respond(201, await team.createInvitation(id, principal(ctx).acct, ctx.body, actorOf(id, ctx))),
+    ),
+    implement(revokeInvitation, async (ctx) => {
+      await team.revokeInvitation(id, principal(ctx).acct, ctx.params.id, actorOf(id, ctx));
+    }),
+    implement(listAccountAuditEvents, async (ctx) => audits.listAccountAuditEvents(id, principal(ctx).acct, ctx.query)),
 
     // ---- account ----------------------------------------------------------------------------------
     implement(getAccount, async (ctx) => readAccount(id, principal(ctx).acct)),
@@ -151,6 +214,10 @@ export function identityRoutes(id: Identity, deps: RouteDeps): RouteBinding[] {
     ),
     implement(revokeApiKey, async (ctx) => {
       await revokeKey(id, principal(ctx).acct, ctx.params.id, actorOf(id, ctx));
+    }),
+    implement(updateApiKey, async (ctx) => {
+      const p = principal(ctx);
+      return updateKey(id, p.acct, p.lm === true, ctx.params.id, ctx.body, actorOf(id, ctx));
     }),
 
     // ---- settlement destinations ---------------------------------------------------------------------
@@ -181,6 +248,50 @@ export function identityRoutes(id: Identity, deps: RouteDeps): RouteBinding[] {
     implement(disableSettlementDestination, async (ctx) => {
       const p = principal(ctx);
       return disableDestination(id, p.acct, p.lm === true, ctx.params.id, actorOf(id, ctx));
+    }),
+    implement(approveSettlementDestination, async (ctx) => {
+      const p = principal(ctx);
+      return approveDestination(id, p.acct, p.lm === true, ctx.params.id, ctx.body.decision, actorOf(id, ctx));
+    }),
+
+    // ---- console (ops host only; authz mints ptype ops) -------------------------------------------------
+    implement(opsEnrolmentVerify, async (ctx) => consoleAuth.enrolmentVerify(id, ctx.body.token)),
+    implement(
+      opsPasskeyRegistrationOptions,
+      async (ctx) => (await consoleAuth.registrationOptions(id, ctx.body)) as never,
+    ),
+    implement(
+      opsPasskeyRegistrationVerify,
+      async (ctx) => consoleAuth.registrationVerify(id, ctx.body as never, meta(id, ctx)) as never,
+    ),
+    implement(
+      opsPasskeyAuthenticationOptions,
+      async (ctx) => (await consoleAuth.authenticationOptions(id, meta(id, ctx))) as never,
+    ),
+    implement(
+      opsPasskeyAuthenticationVerify,
+      async (ctx) => consoleAuth.authenticationVerify(id, ctx.body.credential as never, meta(id, ctx)) as never,
+    ),
+    implement(
+      opsStepUpOptions,
+      async (ctx) => (await consoleAuth.stepUpOptions(id, operator(ctx), meta(id, ctx))) as never,
+    ),
+    implement(opsStepUpVerify, async (ctx) =>
+      consoleAuth.stepUpVerify(id, operator(ctx), ctx.body.credential as never, meta(id, ctx)),
+    ),
+    implement(getOpsSession, async (ctx) => consoleAuth.getOpsSession(id, operator(ctx), meta(id, ctx))),
+    implement(opsLogout, async (ctx) => (await consoleAuth.logout(id, operator(ctx), meta(id, ctx))) as never),
+    implement(listOpsMerchants, async (ctx) => {
+      operator(ctx);
+      return audits.listOpsMerchants(id, ctx.query);
+    }),
+    implement(getOpsMerchant, async (ctx) => {
+      operator(ctx);
+      return audits.getOpsMerchant(id, ctx.params.id) as never;
+    }),
+    implement(listOpsAuditEvents, async (ctx) => {
+      operator(ctx);
+      return audits.listOpsAuditEvents(id, ctx.query);
     }),
 
     // ---- internal ------------------------------------------------------------------------------------

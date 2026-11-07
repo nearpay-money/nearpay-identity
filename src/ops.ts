@@ -5,7 +5,7 @@
 import { hostname } from "node:os";
 import { createDb, createEnvelopeCipher, parseKek } from "@nearpay-internal/db";
 import { ConfigError, createLogger } from "@nearpay-internal/service";
-import { noMetrics } from "./app/context.js";
+import { NO_CONSOLE, noMetrics } from "./app/context.js";
 import { loadSigner } from "./app/tokens.js";
 import { readOpsConfig } from "./config.js";
 import { createAuthzCache } from "./infra/cache.js";
@@ -44,6 +44,7 @@ try {
         recoveryLockMs: 0,
         dashboardOrigin: "",
         webauthn: { rpId: "", rpName: "NearPay", origins: [] },
+        console: { ...NO_CONSOLE, origin: config.opsOrigin?.replace(/\/$/, "") ?? null },
         lookups: {
           nearAccessKey: () => {
             throw new Error("not available in the ops CLI");

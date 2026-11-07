@@ -40,15 +40,20 @@ async function hasActiveLiveDestination(tx: Tx, accountUuid: string): Promise<bo
 export async function saveAccount(
   tx: Tx,
   prev: AccountRow,
-  changes: Partial<Pick<AccountRow, "display_name" | "country" | "fee_bearer" | "settings" | "kyb_status" | "status">>,
+  changes: Partial<
+    Pick<
+      AccountRow,
+      "display_name" | "country" | "fee_bearer" | "settings" | "kyb_status" | "status" | "verified_legal_name"
+    >
+  >,
 ): Promise<AccountRow> {
   const merged = { ...prev, ...changes };
   const live = liveEnabled(merged, await hasActiveLiveDestination(tx, prev.id));
   const next = { ...merged, live_enabled: live };
   const changed =
-    (["display_name", "country", "fee_bearer", "kyb_status", "status", "live_enabled"] as const).some(
-      (k) => next[k] !== prev[k],
-    ) || JSON.stringify(next.settings) !== JSON.stringify(prev.settings);
+    (
+      ["display_name", "country", "fee_bearer", "kyb_status", "status", "live_enabled", "verified_legal_name"] as const
+    ).some((k) => next[k] !== prev[k]) || JSON.stringify(next.settings) !== JSON.stringify(prev.settings);
   if (!changed) return prev;
   const now = await dbNow(tx);
   const updated = await tx
@@ -61,6 +66,7 @@ export async function saveAccount(
       kyb_status: next.kyb_status,
       status: next.status,
       live_enabled: next.live_enabled,
+      verified_legal_name: next.verified_legal_name,
       updated_at: now,
       version: prev.version + 1,
     })
@@ -68,7 +74,15 @@ export async function saveAccount(
     .returningAll()
     .executeTakeFirstOrThrow();
   const previous: Record<string, unknown> = {};
-  for (const k of ["display_name", "country", "fee_bearer", "kyb_status", "status", "live_enabled"] as const)
+  for (const k of [
+    "display_name",
+    "country",
+    "fee_bearer",
+    "kyb_status",
+    "status",
+    "live_enabled",
+    "verified_legal_name",
+  ] as const)
     if (updated[k] !== prev[k]) previous[k] = prev[k];
   if (JSON.stringify(updated.settings) !== JSON.stringify(prev.settings)) previous.settings = prev.settings;
   const view = accountView(updated);
@@ -138,17 +152,31 @@ export async function getRequirements(id: Identity, accountId: string) {
   };
 }
 
-/** `evt.compliance.kyb.*` (consumer): applied only when newer than the last applied KYB event. */
+/**
+ * `evt.compliance.kyb.*` (consumer): applied only when newer than the last applied KYB event.
+ * On `approved` the ops-approved, self-declared legal name and country of incorporation (read from
+ * compliance before the transaction) become `verified_legal_name` / `country` (ADR-0020: reviewed by
+ * NearPay ops, not third-party verified). Leaving `approved` clears `verified_legal_name`, so checkout
+ * and sentinel's `kyb_verified` never show a name ops no longer stands behind.
+ */
 export async function setKybStatus(
   tx: Tx,
   accountUuid: string,
   status: KybStatus,
   sourceVersion: number,
+  approved?: { legalName: string; country: string | null },
 ): Promise<boolean> {
   const a = await tx.selectFrom("accounts").selectAll().where("id", "=", accountUuid).forUpdate().executeTakeFirst();
   if (!a || sourceVersion <= a.kyb_source_version) return false;
   await tx.updateTable("accounts").set({ kyb_source_version: sourceVersion }).where("id", "=", a.id).execute();
-  await saveAccount(tx, { ...a, kyb_source_version: sourceVersion }, { kyb_status: status });
+  const name =
+    status === "approved"
+      ? {
+          verified_legal_name: approved?.legalName ?? a.verified_legal_name,
+          ...(approved?.country ? { country: approved.country } : {}),
+        }
+      : { verified_legal_name: null };
+  await saveAccount(tx, { ...a, kyb_source_version: sourceVersion }, { kyb_status: status, ...name });
   return true;
 }
 

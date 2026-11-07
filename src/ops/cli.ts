@@ -10,6 +10,7 @@ import { fromUuid, isId, toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { ApiError } from "@nearpay-internal/service";
 import { createKey, revokeKey } from "../app/api-keys.js";
 import { DEFAULT_FEE_SCHEDULE } from "../app/auth.js";
+import { sendEnrolment } from "../app/console.js";
 import { audit, dbNow, emitEvent, type Identity } from "../app/context.js";
 import { ACTIVATE_JOB, createDestination } from "../app/destinations.js";
 import { accountView } from "../app/views.js";
@@ -18,7 +19,7 @@ import { DEFAULT_SETTINGS } from "../domain/account/account.js";
 export const USAGE = `usage: ops.js <command> [arguments] [--actor <name>]
 
   account-show <acct_… | email>
-  operator-add <email> ops|ops_admin
+  operator-add <email> ops|ops_admin       (emails a 24 h console enrolment link; NP_OPS_ORIGIN)
   operator-revoke <email>
   destination-cooloff-skip <sd_…>          (NP_ENV=local only)
   seed-demo [--email <email>] [--name <display name>] [--destination <near account>]   (NP_ENV=local only)`;
@@ -104,10 +105,16 @@ export async function runOps(argv: readonly string[], id: Identity, deps: OpsDep
         return 0;
       }
       case "operator-add": {
-        const email = need(args[0], "email");
+        const email = need(args[0], "email").toLowerCase();
         const role = need(args[1], "role");
         if (role !== "ops" && role !== "ops_admin") throw new UsageError("role must be ops or ops_admin");
-        const u = await userByEmail(id, email);
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new UsageError("not an email address");
+        // operators need no merchant account: the user is created when missing (email verified at enrolment)
+        const u = await withTx(id.db, async (tx) => {
+          const existing = await tx.selectFrom("users").selectAll().where("email", "=", email).executeTakeFirst();
+          if (existing) return existing;
+          return tx.insertInto("users").values({ id: uuidv7(), email }).returningAll().executeTakeFirstOrThrow();
+        });
         await withTx(id.db, async (tx) => {
           await tx
             .insertInto("ops_operators")
@@ -122,7 +129,9 @@ export async function runOps(argv: readonly string[], id: Identity, deps: OpsDep
             details: { role },
           });
         });
-        print({ user: fromUuid("usr", u.id), role });
+        // the 24 h enrolment link for the operator's hardware key (console host)
+        await sendEnrolment(id, { id: u.id, email: u.email }, role);
+        print({ user: fromUuid("usr", u.id), role, enrolment: "sent (24 h link)" });
         return 0;
       }
       case "operator-revoke": {

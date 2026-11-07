@@ -5,6 +5,7 @@ import { destinationFingerprint } from "@nearpay-internal/chains";
 import type { Selectable } from "@nearpay-internal/db";
 import { fromUuid } from "@nearpay-internal/ids";
 import type { InternalSettlementDestination } from "@nearpay-internal/spec";
+import { approvedBy, rejectedBy } from "../domain/approval/approval.js";
 import { usdMicrosToCents } from "../domain/settlement-destination/destination.js";
 import type { AccountsTable, ApiKeysTable, SettlementDestinationsTable } from "../infra/db/schema.js";
 
@@ -55,8 +56,15 @@ export function apiKeyView(k: KeyRow, secret?: string): ApiKey {
 export const fingerprintOf = (d: Pick<DestinationRow, "chain" | "address_norm" | "asset_id">) =>
   destinationFingerprint(d.chain, d.address_norm, d.asset_id);
 
+export interface ApprovalRow {
+  readonly user_id: string;
+  readonly decision: "approve" | "reject";
+}
+
 export interface DestinationExtras {
   readonly isDefault: boolean;
+  /** Approval rows of the destination, in order (two-approver rule); omitted = field not shown. */
+  readonly approvals?: readonly ApprovalRow[];
   /** USD micros from rails, or null when unknown. */
   readonly minUsdMicros: number | null;
   readonly challenge?: SettlementDestination["attestation_challenge"];
@@ -82,7 +90,23 @@ export function destinationView(d: DestinationRow, x: DestinationExtras): Settle
     min_payment_amount: x.minUsdMicros === null ? null : { amount: usdMicrosToCents(x.minUsdMicros), currency: "usd" },
     per_payment_cap: cap === null ? null : { amount: usdMicrosToCents(cap), currency: "usd" },
     disabled_reason: d.disabled_reason,
+    ...(x.approvals !== undefined ? { approval: approvalView(d, x.approvals) } : {}),
     ...(x.challenge ? { attestation_challenge: x.challenge } : {}),
+  };
+}
+
+/** `SettlementDestination.approval`: null for test-mode destinations (identity §5). */
+export function approvalView(
+  d: Pick<DestinationRow, "verification" | "approvals_required">,
+  rows: readonly ApprovalRow[],
+) {
+  if (d.verification === "test") return null;
+  const records = rows.map((r) => ({ userId: r.user_id, decision: r.decision }));
+  const rejected = rejectedBy(records);
+  return {
+    required: d.approvals_required,
+    approved_by: approvedBy(records).map((u) => fromUuid("usr", u)),
+    rejected_by: rejected ? fromUuid("usr", rejected) : null,
   };
 }
 

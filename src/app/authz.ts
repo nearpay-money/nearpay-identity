@@ -5,15 +5,24 @@
  * verifies. Route-level authorization (scopes, roles, step-up) stays in each service, from the spec.
  */
 
-import { OPS_SCOPES, PUBLIC_ROUTES } from "@nearpay/spec";
+import { KEY_SCOPES, OPS_ROLE_SCOPES, type OpsRole, PUBLIC_ROUTES } from "@nearpay/spec";
 import type { ClaimsInput } from "@nearpay-internal/auth";
 import { fromUuid, isId, newId } from "@nearpay-internal/ids";
 import { ApiError } from "@nearpay-internal/service";
-import { ipAllowed, keyHash, PUBLISHABLE_SCOPES, parseKey } from "../domain/api-key/key.js";
+import { OPS_ROUTES } from "@nearpay-internal/spec";
+import {
+  expandScopes,
+  ipAllowed,
+  keyHash,
+  PUBLISHABLE_SCOPES,
+  parseKey,
+  restrictedAllows,
+} from "../domain/api-key/key.js";
 import {
   anonymousAllowed,
   clientIp,
   isConsoleHost,
+  isConsolePath,
   isUnsafe,
   publishableAllowed,
   RATE_LIMITS,
@@ -37,6 +46,11 @@ import type { CachedKey } from "../infra/cache.js";
 import type { Identity } from "./context.js";
 
 const match = routeMatcher(PUBLIC_ROUTES as readonly RouteRef[]);
+/** Console host: only `/ops/*` routes (spec `OPS_ROUTES`) are routed there (§8.1 step 3). */
+const matchOps = routeMatcher(OPS_ROUTES as readonly RouteRef[]);
+
+/** Request-token claims; `ops_role` (spec 0.2.0 `InternalTokenClaims`) rides along for ops principals. */
+export type MintedClaims = ClaimsInput & { ops_role?: OpsRole };
 
 export interface AuthzHeaders {
   method?: string | undefined;
@@ -68,7 +82,7 @@ interface SessionRecord {
   last_seen_at: number;
   revoked_at: number | null;
   role: string | null;
-  operator: string | null;
+  operator: OpsRole | null;
 }
 
 /** Batched `last_used_at` / `last_seen_at` writes (at most once a minute per key or session). */
@@ -193,7 +207,7 @@ async function sessionRecord(id: Identity, token: string, kind: "dashboard" | "o
           last_seen_at: s.last_seen_at.getTime(),
           revoked_at: s.revoked_at?.getTime() ?? null,
           role: s.role,
-          operator: s.operator,
+          operator: s.operator as OpsRole | null,
         }
       : null;
   cache.set(hash.toString("hex"), { v });
@@ -207,7 +221,7 @@ export async function authorize(
   id: Identity,
   h: AuthzHeaders,
   touch: Touches,
-): Promise<{ token: string; requestId: string; claims: ClaimsInput }> {
+): Promise<{ token: string; requestId: string; claims: MintedClaims }> {
   const started = performance.now();
   try {
     const r = await decide(id, h, touch);
@@ -222,16 +236,28 @@ export async function authorize(
 async function decide(id: Identity, h: AuthzHeaders, touch: Touches) {
   const now = id.now();
   const method = (h.method ?? "GET").toUpperCase();
-  const route = match(method, h.uri ?? "/");
+  const consoleHost = isConsoleHost(h.host);
+  const opsPath = isConsolePath(h.uri);
+  // the console host serves only console routes, and console routes are served only there
+  if (consoleHost !== opsPath)
+    throw deny(
+      "permission_denied",
+      consoleHost
+        ? "Only console routes are served on the console host."
+        : "Console routes are served only on the console host.",
+    );
+  const route = consoleHost ? matchOps(method, h.uri ?? "/") : match(method, h.uri ?? "/");
   const requestId = isId("req", h.requestId) ? (h.requestId as string) : newId("req");
   const ip = clientIp(id.env, { cfConnectingIp: h.cfConnectingIp, xForwardedFor: h.xForwardedFor });
   const unsafe = isUnsafe(method);
-  let claims: ClaimsInput;
+  let claims: MintedClaims;
   let rateKey: string;
   let rateClass: RateClass;
   let accountUuid: string | null = null;
 
   const bearer = /^Bearer\s+(\S+)$/i.exec(h.authorization?.trim() ?? "")?.[1];
+  // merchant credentials never reach console routes
+  if (bearer && consoleHost) throw deny("permission_denied", "API keys cannot call console routes.");
   if (bearer) {
     // ---- API key -----------------------------------------------------------------------------
     const shape = parseKey(bearer);
@@ -242,19 +268,27 @@ async function decide(id: Identity, h: AuthzHeaders, touch: Touches) {
       throw deny("permission_denied", "Publishable keys can only call checkout and elements routes.");
     accountUuid = k.account_id;
     const ptype = k.type === "secret" ? "secret_key" : k.type === "publishable" ? "publishable_key" : "restricted_key";
+    // restricted keys hold their scopes (write implies read); refused early on routes they cannot call
+    const scp =
+      k.type === "publishable"
+        ? [...PUBLISHABLE_SCOPES]
+        : k.type === "restricted"
+          ? expandScopes(k.scopes, KEY_SCOPES)
+          : [];
+    if (k.type === "restricted" && route && !restrictedAllows(route.auth, scp))
+      throw deny("permission_denied", "This restricted key does not hold a scope for this route.");
     claims = {
       sub: fromUuid("key", k.id),
       acct: fromUuid("acct", k.account_id),
       lm: k.livemode,
       ptype,
-      scp: k.type === "publishable" ? [...PUBLISHABLE_SCOPES] : k.type === "restricted" ? k.scopes : [],
+      scp,
       rid: requestId,
     };
     rateKey = `key:${k.id}`;
     rateClass = k.livemode ? "live" : "test";
     touch.key(k.id, now);
   } else {
-    const consoleHost = isConsoleHost(h.host);
     const token = readCookie(h.cookie, consoleHost ? OPS_COOKIE : SESSION_COOKIE);
     const s = token ? await sessionRecord(id, token, consoleHost ? "ops" : "dashboard") : null;
     if (
@@ -266,17 +300,20 @@ async function decide(id: Identity, h: AuthzHeaders, touch: Touches) {
           revoked_at: s.revoked_at ? new Date(s.revoked_at) : null,
         },
         now,
+        s.kind,
       ) === "valid"
     ) {
       // ---- session ---------------------------------------------------------------------------
       if (unsafe && !matchesHash(h.csrf, s.csrf_hash)) throw new ApiError("csrf_token_invalid");
       const stepUp = stepUpUntil(s.step_up_at ? new Date(s.step_up_at) : null, now);
       if (s.kind === "ops") {
+        // an operator revoked after sign-in loses the console at once (the cached record joins ops_operators)
         if (!s.operator) throw deny("authentication_required");
         claims = {
           sub: fromUuid("usr", s.user_id),
           ptype: "ops",
-          scp: [...OPS_SCOPES],
+          ops_role: s.operator,
+          scp: [...OPS_ROLE_SCOPES[s.operator]],
           rid: requestId,
           ...(stepUp ? { step_up_until: stepUp } : {}),
         };
@@ -330,6 +367,6 @@ async function decide(id: Identity, h: AuthzHeaders, touch: Touches) {
     });
   }
 
-  const token = await id.signer.sign(claims);
+  const token = await id.signer.sign(claims as ClaimsInput);
   return { token, requestId, claims };
 }

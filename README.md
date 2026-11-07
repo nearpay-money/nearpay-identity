@@ -60,21 +60,24 @@ nearpay-identity/
 
 ## Configuration
 
-| Variable                                             | Process     | Meaning                                                                                             |
-| ---------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------- |
-| `NP_DB_URL_FILE`                                     | all         | Database URL (app role; migrator role for `migrate`)                                                |
-| `NP_PII_KEK_FILE`                                    | all         | 32-byte KEK: IPs, CSRF copies, idempotent responses at rest                                         |
-| `NP_JWT_KEYS_DIR`                                    | all         | `current.pem` + `next.pem` (Ed25519); both published in the JWKS, `current` signs; missing → exit 1 |
-| `NP_VALKEY_URL`                                      | api, worker | Key cache and rate limits (down → per-pod limits at half rate)                                      |
-| `NP_NATS_URL`                                        | api, worker | Worker: events; api (optional): cross-replica cache purge                                           |
-| `NP_SERVICE_CLIENTS_FILE`                            | api         | `{"clients":[{"client_id","secret_sha256"}]}`; scopes from the spec                                 |
-| `NP_TURNSTILE_SECRET_FILE`                           | api         | Cloudflare secret; Cloudflare's test secrets are answered locally outside the server stage          |
-| `NP_WEBAUTHN_RP_ID`, `NP_WEBAUTHN_ORIGINS`           | api         | Relying party (`nearpay.localhost` locally) and allowed origins                                     |
-| `NP_DASHBOARD_ORIGIN`                                | api         | Magic links: `<origin>/auth/verify#token=…` (fragment: never in a server log)                       |
-| `NP_COOLOFF_SECONDS`                                 | api, worker | Destination cool-off (86 400; 0 only when `NP_ENV=local`)                                           |
-| `NP_RECOVERY_LOCK_SECONDS`                           | api         | Destination changes after an account recovery (172 800)                                             |
-| `NP_COMPLIANCE_URL`, `NP_RAILS_URL`, `NP_NOTIFY_URL` | api         | Screening, assets/chain profiles/minimums, magic-link mail                                          |
-| `NP_NEAR_RPC_URLS`, `NP_EVM_RPC_URLS`                | api         | Attestation lookups: NEAR `view_access_key` pool; `{"<chain id>": [urls]}` for ERC-1271             |
+| Variable                                             | Process      | Meaning                                                                                                                                                     |
+| ---------------------------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NP_DB_URL_FILE`                                     | all          | Database URL (app role; migrator role for `migrate`)                                                                                                        |
+| `NP_PII_KEK_FILE`                                    | all          | 32-byte KEK: IPs, CSRF copies, idempotent responses at rest                                                                                                 |
+| `NP_JWT_KEYS_DIR`                                    | all          | `current.pem` + `next.pem` (Ed25519); both published in the JWKS, `current` signs; missing → exit 1                                                         |
+| `NP_VALKEY_URL`                                      | api, worker  | Key cache and rate limits (down → per-pod limits at half rate)                                                                                              |
+| `NP_NATS_URL`                                        | api, worker  | Worker: events; api (optional): cross-replica cache purge                                                                                                   |
+| `NP_SERVICE_CLIENTS_FILE`                            | api          | `{"clients":[{"client_id","secret_sha256"}]}`; scopes from the spec                                                                                         |
+| `NP_TURNSTILE_SECRET_FILE`                           | api          | Cloudflare secret; Cloudflare's test secrets are answered locally outside the server stage                                                                  |
+| `NP_WEBAUTHN_RP_ID`, `NP_WEBAUTHN_ORIGINS`           | api          | Relying party (`nearpay.localhost` locally) and allowed origins                                                                                             |
+| `NP_DASHBOARD_ORIGIN`                                | api          | Magic links: `<origin>/auth/verify#token=…` (fragment: never in a server log)                                                                               |
+| `NP_COOLOFF_SECONDS`                                 | api, worker  | Destination cool-off (86 400; 0 only when `NP_ENV=local`)                                                                                                   |
+| `NP_RECOVERY_LOCK_SECONDS`                           | api          | Destination changes after an account recovery (172 800)                                                                                                     |
+| `NP_COMPLIANCE_URL`, `NP_RAILS_URL`, `NP_NOTIFY_URL` | api          | Screening, assets/chain profiles/minimums, magic-link mail                                                                                                  |
+| `NP_NEAR_RPC_URLS`, `NP_EVM_RPC_URLS`                | api          | Attestation lookups: NEAR `view_access_key` pool; `{"<chain id>": [urls]}` for ERC-1271                                                                     |
+| `NP_OPS_ORIGIN`                                      | api, ops CLI | Console origin (`https://ops.…`): operator WebAuthn origin (RP id = its host) and enrolment links; unset → console enrolment refused                        |
+| `NP_OPS_AAGUID_ALLOWLIST_FILE`                       | api          | One AAGUID per line: hardware keys accepted for operators (empty/missing → all refused; virtual-authenticator AAGUIDs only when `NP_ENV` is `local`/`test`) |
+| `NP_OPS_ATTESTATION_ROOTS_FILE`                      | api          | PEM bundle of vendor attestation roots; required on the server stage (without it an AAGUID is only self-asserted)                                           |
 
 ## Behaviour
 
@@ -84,6 +87,11 @@ nearpay-identity/
 - **Destinations:** test mode is active at once (`verification: test`). Live: address/chain/asset/memo checks against rails, screening (fail closed), one live signature-verified row per (chain, address, asset) across accounts, then an attestation challenge (`nep413` with nonce/recipient, or `eip191`; 10 minutes, single use), the cool-off, and the activation job (re-screen; a block disables). While a destination is `pending_verification`, `POST /v1/settlement_destinations/{id}/challenge` (stepped-up owner/admin session, idempotent) issues a fresh challenge in the same shape and supersedes the earlier unused ones (`superseded_at`; `…/attest` answers `challenge_expired` for them); any other status is `409 state_conflict`. The first active destination per asset becomes the default. Every change writes the row, a transition and the outbox event in one transaction.
 - **Live mode:** `live_enabled = KYB approved ∧ active live destination ∧ account active`, recomputed on every change (`account.updated`); compliance events are applied in aggregate-version order.
 - **Internal:** JWKS, client-credentials service tokens, settlement context (account, fee schedule, active destinations, defaults, `context_version`), any destination, notification recipients.
+
+- **Stage 2 — team:** members (`/v1/account/members`), invitations (7-day links via notify `team.invitation`; new users join through the link, existing users sign in and `POST /v1/auth/invitations/accept`), only owners manage owners, `409 last_owner`, removal revokes the member's sessions; `evt.identity.member.*` (ids only). Sessions switch accounts (`/v1/auth/accounts`, `/v1/auth/session/account`); sign-in lands on the most recently used account.
+- **Stage 2 — two-approver rule:** live destinations of accounts with ≥ 2 owners/admins need a second, different owner/admin (`POST /v1/settlement_destinations/{id}/approve`, `403 approver_conflict`) before the cool-off; enforced in the domain, by the `destination_approvals` primary key (the creator's creation is an approval row) and by the `destination_approvals_complete` trigger.
+- **Stage 2 — restricted keys:** `rk_…` with catalogue scopes (write implies read, expanded and checked at the gateway); `PATCH /v1/api_keys/{id}` purges the caches. **Recovery:** `POST /v1/auth/recovery` → link → new passkey on the existing user; `recovered_at` on every account the user owns or administers (destination creation and approval locked 48 h).
+- **Stage 2 — console:** `operator-add` emails a 24 h enrolment link; hardware-key registration on the console host (attestation `direct`, AAGUID allow-list, device-bound) → `__Host-np_ops` (30 min idle / 12 h); ops tokens carry `ops_role` and the role's scopes; the console host routes only `/ops/*`. Merchant search/detail and the platform audit log (identity rows plus `evt.{compliance,sentinel,payments,rails}.ops_action.recorded`, deduped on the action id). KYB: `kyb.submitted` → `pending`; on `kyb.approved` the self-declared legal name ops approved (read from compliance) becomes `verified_legal_name` — reviewed by NearPay ops, not third-party verified; leaving `approved` clears it.
 
 ## Ops CLI (Stage 1)
 
@@ -95,7 +103,7 @@ docker compose exec identity-api /nodejs/bin/node dist/ops.js seed-demo
 
 ## Status
 
-Stage 1 (step 1.2) implemented: every Stage-1 identity route and consumed subject of `@nearpay/spec` / `@nearpay-internal/spec` 0.1.5 (the session read and the challenge re-issue arrived with 0.1.5 in step 1.4). Team members and invitations, the two-approver rule, restricted keys, recovery, console sign-in and Solana/Bitcoin attestations arrive in Stages 2 and 4 (LLD §16).
+Stages 1 and 2 implemented against `@nearpay/spec` / `@nearpay-internal/spec` 0.2.0 and kit 0.2.0: every identity route (public, internal and console) and every subject the catalogue routes to identity (migration 0004). Solana/Bitcoin attestations arrive in Stage 4 (LLD §16).
 
 ## Built with
 

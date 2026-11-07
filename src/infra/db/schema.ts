@@ -1,4 +1,4 @@
-/** Kysely table types (migrations/0001_identity.sql). */
+/** Kysely table types (migrations/0001…0004). */
 import type { ColumnType, Generated, KitTables } from "@nearpay-internal/db";
 
 type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
@@ -78,6 +78,31 @@ export interface MembershipsTable {
   user_id: string;
   role: Role;
   created_at: Timestamp;
+  /** Migration 0004: sign-in picks the most recently used account; switchSessionAccount sets it. */
+  last_used_at: NullableTimestamp;
+}
+
+export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
+
+export interface InvitationsTable {
+  id: string;
+  account_id: string;
+  email: string;
+  role: Role;
+  status: InvitationStatus;
+  invited_by: string;
+  expires_at: Timestamp;
+  accepted_at: NullableTimestamp;
+  accepted_by: string | null;
+  revoked_at: NullableTimestamp;
+  created_at: Timestamp;
+}
+
+export interface DestinationApprovalsTable {
+  destination_id: string;
+  user_id: string;
+  decision: "approve" | "reject";
+  created_at: Timestamp;
 }
 
 export interface PasskeysTable {
@@ -90,6 +115,8 @@ export interface PasskeysTable {
   aaguid: string | null;
   backed_up: Generated<boolean>;
   name: string;
+  /** Migration 0004: `ops` = hardware key registered through operator enrolment (console only). */
+  kind: Generated<"dashboard" | "ops">;
   created_at: Timestamp;
   last_used_at: NullableTimestamp;
 }
@@ -111,12 +138,15 @@ export interface SessionsTable {
   user_agent: string | null;
 }
 
+export type LinkPurpose = "signup" | "recovery" | "invite" | "ops_enrol";
+
 export interface MagicLinksTable {
   token_hash: Buffer;
   email: string;
-  purpose: "signup" | "recovery" | "invite";
+  purpose: LinkPurpose;
   account_id: string | null;
   role: string | null;
+  invitation_id: string | null;
   expires_at: Timestamp;
   used_at: NullableTimestamp;
   created_at: Timestamp;
@@ -129,11 +159,22 @@ export interface RegistrationTokensTable {
   expires_at: Timestamp;
   used_at: NullableTimestamp;
   created_at: Timestamp;
+  purpose: Generated<LinkPurpose>;
+  user_id: string | null;
+  invitation_id: string | null;
 }
+
+export type CeremonyPurpose =
+  | "registration"
+  | "authentication"
+  | "step_up"
+  | "ops_registration"
+  | "ops_authentication"
+  | "ops_step_up";
 
 export interface WebauthnChallengesTable {
   challenge: string;
-  purpose: "registration" | "authentication" | "step_up";
+  purpose: CeremonyPurpose;
   registration_token_hash: Buffer | null;
   user_id: string | null;
   session_id: string | null;
@@ -240,10 +281,12 @@ export interface OpsOperatorsTable {
   revoked_at: NullableTimestamp;
 }
 
+export type AuditActorType = "user" | "api_key" | "service" | "ops" | "operator" | "system";
+
 export interface AuditEventsTable {
   id: string;
   account_id: string | null;
-  actor_type: "user" | "api_key" | "service" | "ops" | "system";
+  actor_type: AuditActorType;
   actor_id: string;
   action: string;
   target_type: string | null;
@@ -270,6 +313,8 @@ export interface IdentityTables {
   attestation_challenges: AttestationChallengesTable;
   ops_operators: OpsOperatorsTable;
   audit_events: AuditEventsTable;
+  invitations: InvitationsTable;
+  destination_approvals: DestinationApprovalsTable;
 }
 
 export type DB = IdentityTables & KitTables;
