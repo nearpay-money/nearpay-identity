@@ -132,6 +132,8 @@ export async function audit(
     action: string;
     target?: { type: string; id: string };
     details?: Record<string, unknown>;
+    /** Where the action was requested from when that is not the actor (CLI login IP); encrypted. */
+    originIp?: string | null;
   },
 ): Promise<void> {
   const eid = uuidv7();
@@ -147,6 +149,7 @@ export async function audit(
       target_id: a.target?.id ?? null,
       details: JSON.stringify(a.details ?? {}),
       ip_enc: a.actor.ip ? id.cipher.encrypt(a.actor.ip, `audit:${eid}:ip`) : null,
+      ...(a.originIp ? { origin_ip_enc: id.cipher.encrypt(a.originIp, `audit:${eid}:origin_ip`) } : {}),
     })
     .execute();
 }

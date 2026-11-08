@@ -126,8 +126,10 @@ export function createAuthzCache(o: { valkeyUrl: string | null; keyTtlMs?: numbe
           return { allowed: allowed === 1, retryAfter: retry };
         } catch {}
       }
-      const r = takeToken(buckets.get(key), degraded(bucket), now);
-      buckets.set(key, r.state);
+      const d = degraded(bucket);
+      const r = takeToken(buckets.get(key), d, now);
+      // keep the state until the bucket would be full again (slow buckets, e.g. 10 per 10 min, outlive 60 s)
+      buckets.set(key, r.state, { ttl: Math.max(60_000, Math.ceil((d.burst / d.rate) * 1000) + 1000) });
       return { allowed: r.allowed, retryAfter: r.retryAfter };
     },
     valkeyUp: up,

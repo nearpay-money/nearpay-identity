@@ -93,6 +93,8 @@ nearpay-identity/
 - **Stage 2 — restricted keys:** `rk_…` with catalogue scopes (write implies read, expanded and checked at the gateway); `PATCH /v1/api_keys/{id}` purges the caches. **Recovery:** `POST /v1/auth/recovery` → link → new passkey on the existing user; `recovered_at` on every account the user owns or administers (destination creation and approval locked 48 h).
 - **Stage 2 — console:** `operator-add` emails a 24 h enrolment link; hardware-key registration on the console host (attestation `direct`, AAGUID allow-list, device-bound) → `__Host-np_ops` (30 min idle / 12 h); ops tokens carry `ops_role` and the role's scopes; the console host routes only `/ops/*`. Merchant search/detail and the platform audit log (identity rows plus `evt.{compliance,sentinel,payments,rails}.ops_action.recorded`, deduped on the action id). KYB: `kyb.submitted` → `pending`; on `kyb.approved` the self-declared legal name ops approved (read from compliance) becomes `verified_legal_name` — reviewed by NearPay ops, not third-party verified; leaving `approved` clears it.
 
+- **Stage 3 — CLI login:** `nearpay login` as an RFC 8628-style device authorization (`POST /v1/cli/logins`, `POST /v1/cli/logins/poll`, anonymous; `GET /v1/cli/logins/{code}` and `…/approve` (step-up) / `…/deny` for owner/admin/developer sessions). Approval mints an ordinary restricted **test** key (`CLI_KEY_SCOPES`, 90 days, audited `api_key.created` with `via: cli_login`); the first poll that sees `approved` receives the secret once. Device codes are stored hashed, IPs and the pending secret envelope-encrypted; polling faster than 5 s is `429` (`slow_down`); uncollected keys are revoked after 15 min (job `cli_logins.expire`).
+
 ## Ops CLI (Stage 1)
 
 ```sh
@@ -103,7 +105,7 @@ docker compose exec identity-api /nodejs/bin/node dist/ops.js seed-demo
 
 ## Status
 
-Stages 1 and 2 implemented against `@nearpay/spec` / `@nearpay-internal/spec` 0.2.0 and kit 0.2.0: every identity route (public, internal and console) and every subject the catalogue routes to identity (migration 0004). Solana/Bitcoin attestations arrive in Stage 4 (LLD §16).
+Stages 1–3 implemented against `@nearpay/spec` / `@nearpay-internal/spec` 0.3.0 and kit 0.2.1: every identity route (public, internal and console, CLI login) and every subject the catalogue routes to identity (migrations up to 0007). Solana/Bitcoin attestations arrive in Stage 4 (LLD §16).
 
 ## Built with
 

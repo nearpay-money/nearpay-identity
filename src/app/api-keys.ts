@@ -23,7 +23,11 @@ import { apiKeyView, type KeyRow } from "./views.js";
 
 const eventObject = (k: KeyRow) => apiKeyView(k);
 
-async function emitKey(tx: Tx, k: KeyRow, subject: "evt.identity.api_key.created" | "evt.identity.api_key.revoked") {
+export async function emitKey(
+  tx: Tx,
+  k: KeyRow,
+  subject: "evt.identity.api_key.created" | "evt.identity.api_key.revoked",
+) {
   await emitEvent(tx, {
     subject,
     aggregate: { type: "api_key", id: fromUuid("key", k.id), version: subject.endsWith("created") ? 1 : 2 },
@@ -59,7 +63,7 @@ export async function listKeys(
   };
 }
 
-async function insertKey(
+export async function insertKey(
   tx: Tx,
   k: {
     accountUuid: string;

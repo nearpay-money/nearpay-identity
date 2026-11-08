@@ -50,6 +50,7 @@ export const ORIGIN = "https://dashboard.nearpay.localhost";
 export const USDC_NEAR = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
 export const USDC_BASE = "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near";
 export const PAYMENTS_CLIENT_SECRET = "payments-client-secret-for-tests";
+export const BILLING_CLIENT_SECRET = "billing-client-secret-for-tests";
 export const OPS_ORIGIN = "https://ops.nearpay.localhost";
 export const OPS_HOST = "ops.nearpay.localhost";
 /** AAGUID of the test "hardware key" (YubiKey 5 series); the only allow-listed model in tests. */
@@ -206,6 +207,7 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     JSON.stringify({
       clients: [
         { client_id: "payments", secret_sha256: createHash("sha256").update(PAYMENTS_CLIENT_SECRET).digest("hex") },
+        { client_id: "billing", secret_sha256: createHash("sha256").update(BILLING_CLIENT_SECRET).digest("hex") },
       ],
     }),
   );

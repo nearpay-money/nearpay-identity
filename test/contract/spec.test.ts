@@ -6,12 +6,23 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
+  approveCliLogin,
+  CLI_KEY_SCOPES,
+  CLI_KEY_TTL_SECONDS,
+  CLI_LOGIN_POLL_INTERVAL_SECONDS,
+  CLI_LOGIN_TTL_SECONDS,
   challengeSettlementDestination,
+  createCliLogin,
   createSettlementDestination,
   DashboardSession,
+  denyCliLogin,
   ERRORS,
+  getCliLogin,
   getDashboardSession,
+  KEY_SCOPES,
+  PUBLIC_ANONYMOUS_ROUTES,
   PUBLIC_ROUTES,
+  pollCliLogin,
   SettlementDestination,
   SPEC_VERSION,
 } from "@nearpay/spec";
@@ -27,11 +38,11 @@ import { type Stack, startStack } from "../support/stack.js";
 const ALL = [...PUBLIC_ROUTES, ...INTERNAL_ROUTES];
 
 describe("routes and events", () => {
-  it("binds every Stage-1 and Stage-2 identity route (incl. console routes), and nothing else", () => {
+  it("binds every Stage-1…3 identity route (incl. console and CLI login routes), and nothing else", () => {
     const bindings = identityRoutes({} as never, { touches: {} as never, serviceClients: new Map() });
     expect(unimplementedRoutes("identity", ALL, bindings).map((r) => r.id)).toEqual([]);
     expect(bindings.map((b) => b.route.id).sort()).toEqual(
-      ALL.filter((r) => r.service === "identity" && r.stage <= 2)
+      ALL.filter((r) => r.service === "identity" && r.stage <= 3)
         .map((r) => r.id)
         .sort(),
     );
@@ -49,8 +60,8 @@ describe("routes and events", () => {
     }
   });
 
-  it("is built against spec 0.2.1; Stage 1 routes keep their shape", () => {
-    expect(SPEC_VERSION).toBe("0.2.1");
+  it("is built against spec 0.3.0; Stage 1 routes keep their shape", () => {
+    expect(SPEC_VERSION).toBe("0.3.0");
     const bound = identityRoutes({} as never, { touches: {} as never, serviceClients: new Map() }).map(
       (b) => b.route.id,
     );
@@ -76,6 +87,41 @@ describe("routes and events", () => {
     expect(ERRORS.challenge_expired.message).toMatch(/request a new challenge for the destination/);
   });
 
+  it("CLI login (spec 0.3.0): anonymous create/poll, session owner/admin/developer for the rest, step-up to approve", () => {
+    const bound = new Set(
+      identityRoutes({} as never, { touches: {} as never, serviceClients: new Map() }).map((b) => b.route.id),
+    );
+    for (const r of [createCliLogin, pollCliLogin, getCliLogin, approveCliLogin, denyCliLogin])
+      expect(bound.has(r.id), r.id).toBe(true);
+    expect(createCliLogin).toMatchObject({ method: "POST", path: "/v1/cli/logins", auth: ["anonymous"], status: 201 });
+    expect(pollCliLogin).toMatchObject({
+      method: "POST",
+      path: "/v1/cli/logins/poll",
+      auth: ["anonymous"],
+      status: 200,
+    });
+    for (const r of [getCliLogin, approveCliLogin, denyCliLogin])
+      expect(r).toMatchObject({ auth: ["session"], roles: ["owner", "admin", "developer"] });
+    expect(approveCliLogin.stepUp).toBe(true);
+    expect(denyCliLogin).not.toHaveProperty("stepUp");
+    const anon = PUBLIC_ANONYMOUS_ROUTES.map((r) => `${r.method} ${r.path}`);
+    expect(anon).toEqual(
+      expect.arrayContaining([
+        "POST /v1/cli/logins",
+        "POST /v1/cli/logins/poll",
+        "GET /v1/invoices/{id}/public",
+        "POST /v1/invoices/{id}/public/sessions",
+        "GET /v1/invoices/{id}/public/pdf",
+      ]),
+    );
+    expect(anon).not.toContain("GET /v1/cli/logins/{code}");
+    // the minted key holds only catalogue scopes (the gateway expands write → read from KEY_SCOPES)
+    for (const scope of CLI_KEY_SCOPES) expect(KEY_SCOPES).toContain(scope);
+    expect(CLI_LOGIN_TTL_SECONDS).toBe(900);
+    expect(CLI_KEY_TTL_SECONDS).toBe(90 * 86_400);
+    expect(CLI_LOGIN_POLL_INTERVAL_SECONDS).toBe(5);
+  });
+
   it("handles every subject the catalogue routes to identity", () => {
     const handlers = identityHandlers({} as never, { purgeKey: async () => {} });
     expect(unhandledSubjects("identity", handlers)).toEqual([]);
@@ -84,7 +130,7 @@ describe("routes and events", () => {
 
   it("emits every subject identity produces", () => {
     const produced = (Object.keys(SUBJECTS) as Subject[]).filter(
-      (k) => SUBJECTS[k].producer === "identity" && SUBJECTS[k].stage <= 2,
+      (k) => SUBJECTS[k].producer === "identity" && SUBJECTS[k].stage <= 3,
     );
     const files = (dir: string): string[] =>
       readdirSync(dir).flatMap((f) => (statSync(join(dir, f)).isDirectory() ? files(join(dir, f)) : [join(dir, f)]));
@@ -196,6 +242,20 @@ describe("sentinel registry view", () => {
       select pg_get_constraintdef(oid) as def from pg_constraint
       where conname = 'settlement_destinations_disabled_reason_check'`.execute(s.admin.db);
     expect(check.rows[0]?.def).toContain("expired");
+  });
+  it("migration 0007: cli_logins (hashed device code, encrypted IP and secret) and audit origin IP", async () => {
+    const cols = await sql<{ column_name: string }>`
+      select column_name from information_schema.columns where table_name = 'cli_logins' order by column_name`.execute(
+      s.admin.db,
+    );
+    const names = cols.rows.map((c) => c.column_name);
+    expect(names).toEqual(expect.arrayContaining(["device_code_sha256", "ip_enc", "key_secret_enc", "user_code"]));
+    expect(names).not.toContain("device_code");
+    expect(names).not.toContain("ip");
+    const audit = await sql<{ column_name: string }>`
+      select column_name from information_schema.columns
+      where table_name = 'audit_events' and column_name = 'origin_ip_enc'`.execute(s.admin.db);
+    expect(audit.rows).toHaveLength(1);
   });
   it("the audit log is append-only even for the app role", async () => {
     await s.admin.db

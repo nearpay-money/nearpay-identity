@@ -22,16 +22,16 @@
   },
   "dependencies": {
     "@nats-io/transport-node": "3.4.0",
-    "@nearpay-internal/auth": "0.2.0",
-    "@nearpay-internal/bus": "0.2.0",
-    "@nearpay-internal/chains": "0.2.0",
-    "@nearpay-internal/db": "0.2.0",
-    "@nearpay-internal/http": "0.2.0",
-    "@nearpay-internal/ids": "0.2.0",
-    "@nearpay-internal/intents": "0.2.0",
-    "@nearpay-internal/service": "0.2.0",
-    "@nearpay-internal/spec": "0.2.1",
-    "@nearpay/spec": "0.2.1",
+    "@nearpay-internal/auth": "0.2.1",
+    "@nearpay-internal/bus": "0.2.1",
+    "@nearpay-internal/chains": "0.2.1",
+    "@nearpay-internal/db": "0.2.1",
+    "@nearpay-internal/http": "0.2.1",
+    "@nearpay-internal/ids": "0.2.1",
+    "@nearpay-internal/intents": "0.2.1",
+    "@nearpay-internal/service": "0.2.1",
+    "@nearpay-internal/spec": "0.3.0",
+    "@nearpay/spec": "0.3.0",
     "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
     "@simplewebauthn/server": "14.0.3",
@@ -42,7 +42,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.5",
-    "@nearpay-internal/testing": "0.2.0",
+    "@nearpay-internal/testing": "0.2.1",
     "@types/node": "22.20.5",
     "@vitest/coverage-v8": "2.1.9",
     "fast-check": "4.10.2",
@@ -52,8 +52,8 @@
   },
   "pnpm": {
     "overrides": {
-      "@nearpay/spec": "0.2.1",
-      "@nearpay-internal/spec": "0.2.1"
+      "@nearpay/spec": "0.3.0",
+      "@nearpay-internal/spec": "0.3.0"
     },
     "onlyBuiltDependencies": [
       "esbuild",
