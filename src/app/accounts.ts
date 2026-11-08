@@ -43,7 +43,14 @@ export async function saveAccount(
   changes: Partial<
     Pick<
       AccountRow,
-      "display_name" | "country" | "fee_bearer" | "settings" | "kyb_status" | "status" | "verified_legal_name"
+      | "display_name"
+      | "country"
+      | "website"
+      | "fee_bearer"
+      | "settings"
+      | "kyb_status"
+      | "status"
+      | "verified_legal_name"
     >
   >,
 ): Promise<AccountRow> {
@@ -52,7 +59,16 @@ export async function saveAccount(
   const next = { ...merged, live_enabled: live };
   const changed =
     (
-      ["display_name", "country", "fee_bearer", "kyb_status", "status", "live_enabled", "verified_legal_name"] as const
+      [
+        "display_name",
+        "country",
+        "website",
+        "fee_bearer",
+        "kyb_status",
+        "status",
+        "live_enabled",
+        "verified_legal_name",
+      ] as const
     ).some((k) => next[k] !== prev[k]) || JSON.stringify(next.settings) !== JSON.stringify(prev.settings);
   if (!changed) return prev;
   const now = await dbNow(tx);
@@ -61,6 +77,7 @@ export async function saveAccount(
     .set({
       display_name: next.display_name,
       country: next.country,
+      website: next.website,
       fee_bearer: next.fee_bearer,
       settings: JSON.stringify(next.settings),
       kyb_status: next.kyb_status,
@@ -77,6 +94,7 @@ export async function saveAccount(
   for (const k of [
     "display_name",
     "country",
+    "website",
     "fee_bearer",
     "kyb_status",
     "status",
@@ -117,6 +135,7 @@ export async function updateAccount(
     const current: AccountFields = {
       display_name: a.display_name,
       country: a.country ? a.country.trim() : null,
+      website: a.website,
       fee_bearer: a.fee_bearer,
       settings: a.settings,
     };

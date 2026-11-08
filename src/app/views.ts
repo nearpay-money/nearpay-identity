@@ -5,6 +5,7 @@ import { destinationFingerprint } from "@nearpay-internal/chains";
 import type { Selectable } from "@nearpay-internal/db";
 import { fromUuid } from "@nearpay-internal/ids";
 import type { InternalSettlementDestination } from "@nearpay-internal/spec";
+import { withSettingDefaults } from "../domain/account/account.js";
 import { approvedBy, rejectedBy } from "../domain/approval/approval.js";
 import { usdMicrosToCents } from "../domain/settlement-destination/destination.js";
 import type { AccountsTable, ApiKeysTable, SettlementDestinationsTable } from "../infra/db/schema.js";
@@ -29,7 +30,8 @@ export function accountView(a: AccountRow): Account {
     live_enabled: a.live_enabled,
     fee_bearer: a.fee_bearer,
     api_version: a.api_version as Account["api_version"],
-    settings: a.settings,
+    settings: withSettingDefaults(a.settings) as Account["settings"],
+    website: a.website,
   };
 }
 
@@ -90,6 +92,7 @@ export function destinationView(d: DestinationRow, x: DestinationExtras): Settle
     min_payment_amount: x.minUsdMicros === null ? null : { amount: usdMicrosToCents(x.minUsdMicros), currency: "usd" },
     per_payment_cap: cap === null ? null : { amount: usdMicrosToCents(cap), currency: "usd" },
     disabled_reason: d.disabled_reason,
+    created_by: fromUuid("usr", d.created_by),
     ...(x.approvals !== undefined ? { approval: approvalView(d, x.approvals) } : {}),
     ...(x.challenge ? { attestation_challenge: x.challenge } : {}),
   };

@@ -247,7 +247,11 @@ describe("two-approver rule against one person", () => {
     expect(r.status).toBe(409);
     expect(r.body.error.code).toBe("state_conflict");
     expect(await expirePendingDestinations(s.identity)).toBeGreaterThanOrEqual(1);
-    expect(await destRow(created.id)).toMatchObject({ status: "disabled", disabled_reason: "merchant" });
+    expect(await destRow(created.id)).toMatchObject({ status: "disabled", disabled_reason: "expired" });
+    // spec 0.2.1: the public object names the creator and the expiry reason
+    expect(created.created_by).toBe(a.userId);
+    const got = await s.gateway("GET", `/v1/settlement_destinations/${created.id}`, as(a, "live"));
+    expect(got.body).toMatchObject({ status: "disabled", disabled_reason: "expired", created_by: a.userId });
     const t = await s.admin.db
       .selectFrom("settlement_destination_transitions")
       .select("cause")
@@ -388,6 +392,27 @@ describe("recovery", () => {
       .where("id", "=", toUuid(u.accountId, "acct"))
       .executeTakeFirstOrThrow();
     expect(acct.recovered_at).not.toBeNull();
+    // spec 0.2.1: evt.identity.user.recovered (platform event, version = recovery count, ids only)
+    const outboxed = await s.admin.db
+      .selectFrom("outbox")
+      .selectAll()
+      .where("subject", "=", "evt.identity.user.recovered")
+      .where("aggregate_id", "=", toUuid(u.userId, "usr"))
+      .execute();
+    expect(outboxed).toHaveLength(1);
+    const ev = outboxed[0] as (typeof outboxed)[number];
+    expect(ev).toMatchObject({ account_id: null, livemode: null, aggregate_type: "user", aggregate_version: 1 });
+    const obj = (ev.payload as { data: { object: Record<string, string | string[]> } }).data.object;
+    expect(obj).toMatchObject({ user_id: u.userId, account_ids: [u.accountId] });
+    expect(Date.parse(obj.lock_until as string) - Date.parse(obj.recovered_at as string)).toBe(48 * 3_600_000);
+    expect(JSON.stringify(ev.payload)).not.toContain("@recover.test");
+    // and the member's security summary
+    const members = await s.gateway("GET", "/v1/account/members", { cookie: recovered.cookie });
+    const me = members.body.data.find((m: { user: { id: string } }) => m.user.id === u.userId);
+    expect(me.security).toEqual({
+      passkeys: 2,
+      recovered_at: Math.floor(Date.parse(obj.recovered_at as string) / 1000),
+    });
     await stepUp(s, recovered);
     const d = await s.gateway(
       "POST",

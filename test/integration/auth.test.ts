@@ -207,6 +207,34 @@ describe("sign-in, step-up, logout", () => {
     ).toMatchObject({ display_name: "Login Shop 2" });
   });
 
+  it("spec 0.2.1: website, theme and corner radius are stored and served (no step-up; validated)", async () => {
+    const before = await s.gateway("GET", "/v1/account", { cookie: u.cookie });
+    expect(before.body.settings.branding).toMatchObject({ theme: "auto", corner_radius: 8 });
+    const r = await s.gateway(
+      "PATCH",
+      "/v1/account",
+      as(u, "test", {
+        website: "https://login.shop.example",
+        settings: { branding: { theme: "dark", corner_radius: 4 } },
+      }),
+    );
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body).toMatchObject({
+      website: "https://login.shop.example",
+      settings: { branding: { theme: "dark", corner_radius: 4 } },
+    });
+    const got = await s.gateway("GET", "/v1/account", { cookie: u.cookie });
+    expect(got.body).toMatchObject({
+      website: "https://login.shop.example",
+      settings: { branding: { theme: "dark" } },
+    });
+    const bad = await s.gateway("PATCH", "/v1/account", as(u, "test", { website: "http://insecure.example" }));
+    expect(bad.status).toBe(400);
+    expect(bad.body.error.param).toBe("website");
+    const cleared = await s.gateway("PATCH", "/v1/account", as(u, "test", { website: null }));
+    expect(cleared.body.website).toBeNull();
+  });
+
   it("step-up stamps the request token for 10 minutes; step-up routes need it", async () => {
     // signing in is itself a fresh assertion; age it past 10 minutes
     await s.admin.db

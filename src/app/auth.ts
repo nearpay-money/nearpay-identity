@@ -614,7 +614,12 @@ async function recover(id: Identity, tx: Tx, reg: RegistrationRow, passkey: Pass
   if (user?.status !== "active") throw new ApiError("link_expired");
   const now = await dbNow(tx);
   await tx.insertInto("passkeys").values(passkey(userId)).execute();
-  await tx.updateTable("users").set({ last_login_at: now }).where("id", "=", userId).execute();
+  const counted = await tx
+    .updateTable("users")
+    .set((eb) => ({ last_login_at: now, recovered_at: now, recovery_count: eb("recovery_count", "+", 1) }))
+    .where("id", "=", userId)
+    .returning("recovery_count")
+    .executeTakeFirstOrThrow();
   const managed = await tx
     .selectFrom("memberships")
     .select("account_id")
@@ -635,6 +640,19 @@ async function recover(id: Identity, tx: Tx, reg: RegistrationRow, passkey: Pass
       details: { destination_lock_until: new Date(now.getTime() + id.recoveryLockMs).toISOString() },
     });
   }
+  // spec 0.2.1: notify mails the owners and admins of every locked account (`security.recovery`)
+  await emitEvent(tx, {
+    subject: "evt.identity.user.recovered",
+    aggregate: { type: "user", id: fromUuid("usr", userId), version: counted.recovery_count },
+    accountUuid: null,
+    livemode: null,
+    object: {
+      user_id: fromUuid("usr", userId),
+      account_ids: managed.map((x) => fromUuid("acct", x.account_id)),
+      recovered_at: now.toISOString(),
+      lock_until: new Date(now.getTime() + id.recoveryLockMs).toISOString(),
+    },
+  });
   const m = await landingAccount(tx, userId);
   if (!m) throw failed("the user has no account");
   const s = await createSession(id, tx, { kind: "dashboard", userId, accountId: m.account_id, meta, steppedUp: false });

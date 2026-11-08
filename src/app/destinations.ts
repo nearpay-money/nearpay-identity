@@ -898,7 +898,7 @@ async function disableRow(
   id: Identity,
   tx: Tx,
   d: DestinationRow,
-  reason: "merchant" | "compliance" | "replaced",
+  reason: "merchant" | "compliance" | "replaced" | "expired",
   actor: string,
   cause = `disabled:${reason}`,
 ) {
@@ -926,7 +926,7 @@ export const EXPIRE_JOB = "destination.expire";
 
 /**
  * Job `destination.expire` (hourly, §9): live destinations still pending (verification or approval)
- * 7 days after creation are disabled (`disabled_reason: merchant`, transition cause `expired`, audit
+ * 7 days after creation are disabled (`disabled_reason: expired` since spec 0.2.1, transition cause `expired`, audit
  * `destination.expired`), so a stale pending change cannot be approved later on a changed team.
  */
 export async function expirePendingDestinations(id: Identity): Promise<number> {
@@ -949,7 +949,7 @@ export async function expirePendingDestinations(id: Identity): Promise<number> {
         .executeTakeFirst();
       if (!d || !transition(d.status, "expire").ok || !isExpired(d.created_at.getTime(), (await dbNow(tx)).getTime()))
         return 0;
-      await disableRow(id, tx, d, "merchant", "system:expiry", "expired");
+      await disableRow(id, tx, d, "expired", "system:expiry", "expired");
       await audit(id, tx, {
         accountUuid: d.account_id,
         actor: { type: "system", id: "system:expiry" },

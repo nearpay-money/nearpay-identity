@@ -128,7 +128,15 @@ async function purgeSessions(id: Identity, db: Identity["db"] | Tx, accountUuid:
 // Members
 // ---------------------------------------------------------------------------------------------
 
-type MemberRow = { user_id: string; email: string; role: Role; created_at: Date; last_login_at: Date | null };
+type MemberRow = {
+  user_id: string;
+  email: string;
+  role: Role;
+  created_at: Date;
+  last_login_at: Date | null;
+  recovered_at: Date | null;
+  passkeys: number | string | bigint | null;
+};
 
 const memberView = (m: MemberRow) => ({
   object: "member" as const,
@@ -136,13 +144,30 @@ const memberView = (m: MemberRow) => ({
   role: m.role,
   created: unix(m.created_at),
   last_login_at: m.last_login_at ? unix(m.last_login_at) : null,
+  // spec 0.2.1: dashboard passkeys only (console hardware keys are not the member's sign-in)
+  security: { passkeys: Number(m.passkeys), recovered_at: m.recovered_at ? unix(m.recovered_at) : null },
 });
 
 function membersQuery(db: Identity["db"] | Tx, accountUuid: string) {
   return db
     .selectFrom("memberships")
     .innerJoin("users", "users.id", "memberships.user_id")
-    .select(["memberships.user_id", "users.email", "memberships.role", "memberships.created_at", "users.last_login_at"])
+    .select([
+      "memberships.user_id",
+      "users.email",
+      "memberships.role",
+      "memberships.created_at",
+      "users.last_login_at",
+      "users.recovered_at",
+    ])
+    .select((eb) =>
+      eb
+        .selectFrom("passkeys")
+        .select(eb.fn.countAll<string>().as("n"))
+        .whereRef("passkeys.user_id", "=", "memberships.user_id")
+        .where("passkeys.kind", "=", "dashboard")
+        .as("passkeys"),
+    )
     .where("memberships.account_id", "=", accountUuid);
 }
 
