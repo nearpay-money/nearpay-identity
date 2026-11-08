@@ -230,12 +230,20 @@ export interface ApiKeysTable {
 export type DestinationStatus = "pending_verification" | "pending_approval" | "cooling_off" | "active" | "disabled";
 
 export type Attestation = {
-  standard: "nep413" | "eip191";
+  standard: "nep413" | "eip191" | "solana" | "bip322";
   message: string;
   signature: string;
   public_key: string | null;
   verified_at: string;
-  method: "ed25519" | "implicit" | "full_access_key" | "ecrecover" | "erc1271";
+  method:
+    | "ed25519"
+    | "implicit"
+    | "full_access_key"
+    | "ecrecover"
+    | "erc1271"
+    | "solana_ed25519"
+    | "bip322_p2wpkh"
+    | "bip322_p2tr";
 };
 
 export interface SettlementDestinationsTable {

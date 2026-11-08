@@ -6,8 +6,12 @@
  *   `hex(public key)`; a named account must hold the key as a **full-access key** at final block.
  * - EIP-191 (EVM addresses and `0x…` Intents accounts): `personal_sign`, `ecrecover == address`;
  *   ERC-1271 `isValidSignature` for contract wallets on the stated chain when an RPC is configured.
+ * - Solana (Stage 4, §20): ed25519 over the raw message bytes, base58 signature, on-curve address
+ *   (`solana.ts`).
+ * - BIP-322 "simple" (Stage 4, §20): P2WPKH / P2TR Bitcoin addresses, base64 witness (`bip322.ts`).
  *
- * The signature checks are pure; ownership lookups go through the injected RPC functions.
+ * The signature checks are pure; ownership lookups go through the injected RPC functions (NEAR named
+ * accounts and ERC-1271 only — Solana and Bitcoin need no RPC, so they are never "unavailable").
  */
 
 import { erc191Hash, nep413Hash } from "@nearpay-internal/intents";
@@ -16,12 +20,31 @@ import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import bs58 from "bs58";
 import { NEP413_RECIPIENT } from "../../domain/settlement-destination/destination.js";
+import type { AttestStandard } from "../../spec-0.4.0-placeholder.js";
+import { verifyBip322Simple } from "./bip322.js";
+import { verifySolanaSignature } from "./solana.js";
 
-export type AttestationMethod = "ed25519" | "implicit" | "full_access_key" | "ecrecover" | "erc1271";
+export type AttestationMethod =
+  | "ed25519"
+  | "implicit"
+  | "full_access_key"
+  | "ecrecover"
+  | "erc1271"
+  | "solana_ed25519"
+  | "bip322_p2wpkh"
+  | "bip322_p2tr";
 
 export type AttestationResult =
   | { readonly ok: true; readonly method: AttestationMethod; readonly publicKey: string | null }
-  | { readonly ok: false; readonly reason: string };
+  | { readonly ok: false; readonly reason: string; readonly hint?: string };
+
+/** User-facing advice for a rejection the merchant can fix (the reason itself is only logged). */
+const HINTS: Record<string, string> = {
+  offchain_format:
+    "This looks like a Solana off-chain message signature (e.g. from a Ledger). Sign the message as raw bytes with a wallet such as Phantom, Solflare or Backpack.",
+  off_curve:
+    "This Solana address is program-derived (for example a multisig vault) and cannot sign a message, so its ownership cannot be proven with a signature. Use a wallet address you can sign with.",
+};
 
 /** An ownership lookup that could not be completed (RPC down): retryable, not a rejection. */
 export class AttestationUnavailable extends Error {
@@ -95,7 +118,7 @@ export function recoverEip191(message: string, signature: string): string | null
 }
 
 export interface AttestInput {
-  readonly standard: "nep413" | "eip191";
+  readonly standard: AttestStandard;
   readonly chain: string;
   readonly addressNorm: string;
   readonly message: string;
@@ -106,6 +129,17 @@ export interface AttestInput {
 
 /** Verifies the signature and that the signer controls the destination address. */
 export async function verifyAttestation(i: AttestInput, rpc: OwnershipLookups): Promise<AttestationResult> {
+  if (i.standard === "solana") {
+    if (!i.chain.startsWith("solana:")) return { ok: false, reason: "solana signatures are for Solana addresses" };
+    const r = verifySolanaSignature(i.addressNorm, i.message, i.signature);
+    if (r.ok) return { ok: true, method: "solana_ed25519", publicKey: null };
+    return { ok: false, reason: r.reason, ...(r.hint ? { hint: HINTS[r.hint] } : {}) };
+  }
+  if (i.standard === "bip322") {
+    if (!i.chain.startsWith("bip122:")) return { ok: false, reason: "bip322 signatures are for Bitcoin addresses" };
+    const r = verifyBip322Simple(i.addressNorm, i.message, i.signature);
+    return r.ok ? { ok: true, method: `bip322_${r.addressType}`, publicKey: null } : { ok: false, reason: r.reason };
+  }
   if (i.standard === "nep413") {
     if (ETH_RE.test(i.addressNorm)) return { ok: false, reason: "a 0x account signs with eip191" };
     if (!verifyNep413Signature(i.message, i.nonce, i.signature, i.publicKey))

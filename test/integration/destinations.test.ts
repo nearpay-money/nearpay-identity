@@ -7,7 +7,7 @@ import { connect } from "@nats-io/transport-node";
 import { SettlementDestination } from "@nearpay/spec";
 import { sql } from "@nearpay-internal/db";
 import { newId, toUuid } from "@nearpay-internal/ids";
-import { createScreening, getInternalAsset, listChainProfiles } from "@nearpay-internal/spec";
+import { createScreening, listChainProfiles } from "@nearpay-internal/spec";
 import { domainEvent, type EventProbe, mintServiceToken, mockError } from "@nearpay-internal/testing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { evmSigner, nearSigner } from "../support/signers.js";
@@ -304,7 +304,7 @@ describe("live mode", () => {
     ).toBe("cooling_off");
   });
 
-  it("an expired challenge cannot be used; Solana/Bitcoin live destinations wait for Stage 4", async () => {
+  it("an expired challenge cannot be used", async () => {
     const near = nearSigner();
     const r = await create(
       { asset_id: USDC_NEAR, type: "intents_account", chain: "near:mainnet", address: near.implicitAccount },
@@ -328,29 +328,6 @@ describe("live mode", () => {
     );
     expect(late.status).toBe(410);
     expect(late.body).toMatchObject({ error: { code: "challenge_expired" } });
-    s.rails.on(getInternalAsset, async () => ({
-      asset_id: "nep141:sol.omft.near",
-      chain: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-      blockchain: "sol",
-      symbol: "SOL",
-      decimals: 9,
-      family: "solana",
-      is_usd_stable: false,
-      price_usd: "150",
-      price_ok: true,
-      as_of: null,
-    }));
-    s.rails.on(listChainProfiles, async () => ({ profiles: [] }));
-    const sol = await create(
-      {
-        asset_id: "nep141:sol.omft.near",
-        type: "chain_address",
-        chain: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-        address: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
-      },
-      "live",
-    );
-    expect(sol.body).toMatchObject({ error: { code: "invalid_request", param: "chain" } });
   });
 
   it("the same live address can belong to one account only", async () => {

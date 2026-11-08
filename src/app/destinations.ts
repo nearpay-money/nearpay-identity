@@ -29,15 +29,19 @@ import {
 import {
   approvalsRequired,
   attestationMessage,
+  BITCOIN_DESTINATION_HINT,
+  bitcoinAddressType,
+  bitcoinDestinationAllowed,
   CHALLENGE_TTL_MS,
   NEP413_RECIPIENT,
   type SigningStandard,
-  STAGE1_STANDARDS,
   signingStandard,
   transition,
+  VERIFIABLE_STANDARDS,
 } from "../domain/settlement-destination/destination.js";
 import { AttestationUnavailable, verifyAttestation } from "../infra/crypto/attestation.js";
 import type { DestinationStatus } from "../infra/db/schema.js";
+import type { AttestStandard } from "../spec-0.4.0-placeholder.js";
 import { refreshLiveEnabled } from "./accounts.js";
 import { type Actor, audit, dbNow, emitEvent, type Identity, type Tx } from "./context.js";
 import {
@@ -379,6 +383,13 @@ export async function createDestination(
   const v = validateAddress(b.chain, b.address);
   if (!v.ok) throw addressInvalid(b.address, b.chain, v.reason);
   const addressNorm = v.normalized;
+  // Bitcoin: P2WPKH / P2TR only, both modes (§20) — BIP-322 simple cannot prove the other types
+  if (info.family === "bitcoin" && !bitcoinDestinationAllowed(addressNorm))
+    throw new ApiError("address_invalid", {
+      params: { address: b.address, chain: b.chain },
+      param: "address",
+      message: `${BITCOIN_DESTINATION_HINT}: ${b.address} is a ${bitcoinAddressType(addressNorm)} address, which cannot prove ownership with BIP-322.`,
+    });
 
   // 2. asset and chain support (rails catalogue)
   const asset = await id.peers.asset(b.asset_id).catch((e: unknown) => {
@@ -392,11 +403,8 @@ export async function createDestination(
     if (profile?.memo_mode === "required") throw new ApiError("memo_destination_unsupported");
   }
   const standard = signingStandard(b.type, info.family, addressNorm);
-  if (livemode && !STAGE1_STANDARDS.includes(standard))
-    throw ApiError.invalid(
-      `live destinations on ${info.name} need ${standard} attestation, which arrives in Stage 4`,
-      "chain",
-    );
+  if (livemode && !VERIFIABLE_STANDARDS.includes(standard))
+    throw ApiError.invalid(`live destinations on ${info.name} cannot be attested`, "chain");
 
   // 3. recovery lock (48 h after an account recovery, §12)
   const account = await id.db.selectFrom("accounts").selectAll().where("id", "=", acct).executeTakeFirstOrThrow();
@@ -615,7 +623,7 @@ export async function attestDestination(
   accountId: string,
   livemode: boolean,
   destinationId: string,
-  b: { challenge_id: string; standard: "nep413" | "eip191"; signature: string; public_key?: string | undefined },
+  b: { challenge_id: string; standard: AttestStandard; signature: string; public_key?: string | undefined },
   actor: Actor,
 ) {
   const d0 = await loadOwn(id.db, accountId, livemode, destinationId);
@@ -659,8 +667,8 @@ export async function attestDestination(
   }
   if (!result.ok) {
     id.metrics.attestationFailure(b.standard);
-    id.log.info({ destination: destinationId, reason: result.reason }, "attestation rejected");
-    throw new ApiError("attestation_invalid");
+    id.log.info({ destination: destinationId, standard: b.standard, reason: result.reason }, "attestation rejected");
+    throw new ApiError("attestation_invalid", result.hint ? { message: result.hint } : {});
   }
 
   return withTx(id.db, async (tx) => {

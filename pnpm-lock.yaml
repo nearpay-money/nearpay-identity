@@ -5,8 +5,8 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@nearpay/spec': 0.3.0
-  '@nearpay-internal/spec': 0.3.0
+  '@nearpay/spec': 0.3.1
+  '@nearpay-internal/spec': 0.3.1
 
 importers:
 
@@ -16,41 +16,47 @@ importers:
         specifier: 3.4.0
         version: 3.4.0
       '@nearpay-internal/auth':
-        specifier: 0.2.1
-        version: 0.2.1(zod@4.6.7)
+        specifier: 0.3.1
+        version: 0.3.1(zod@4.6.7)
       '@nearpay-internal/bus':
-        specifier: 0.2.1
-        version: 0.2.1(zod@4.6.7)
+        specifier: 0.3.1
+        version: 0.3.1(zod@4.6.7)
       '@nearpay-internal/chains':
-        specifier: 0.2.1
-        version: 0.2.1
+        specifier: 0.3.1
+        version: 0.3.1
       '@nearpay-internal/db':
-        specifier: 0.2.1
-        version: 0.2.1(zod@4.6.7)
+        specifier: 0.3.1
+        version: 0.3.1(zod@4.6.7)
       '@nearpay-internal/http':
-        specifier: 0.2.1
-        version: 0.2.1(zod@4.6.7)
+        specifier: 0.3.1
+        version: 0.3.1(zod@4.6.7)
       '@nearpay-internal/ids':
-        specifier: 0.2.1
-        version: 0.2.1(zod@4.6.7)
+        specifier: 0.3.1
+        version: 0.3.1(zod@4.6.7)
       '@nearpay-internal/intents':
-        specifier: 0.2.1
-        version: 0.2.1(@near-js/types@2.5.1)(@near-js/utils@2.5.1(@near-js/types@2.5.1))(zod@4.6.7)
+        specifier: 0.3.1
+        version: 0.3.1(@near-js/types@2.5.1)(@near-js/utils@2.5.1(@near-js/types@2.5.1))(zod@4.6.7)
       '@nearpay-internal/service':
-        specifier: 0.2.1
-        version: 0.2.1(zod@4.6.7)
+        specifier: 0.3.1
+        version: 0.3.1(zod@4.6.7)
       '@nearpay-internal/spec':
-        specifier: 0.3.0
-        version: 0.3.0(zod@4.6.7)
+        specifier: 0.3.1
+        version: 0.3.1(zod@4.6.7)
       '@nearpay/spec':
-        specifier: 0.3.0
-        version: 0.3.0(zod@4.6.7)
+        specifier: 0.3.1
+        version: 0.3.1(zod@4.6.7)
       '@noble/curves':
         specifier: 2.4.0
         version: 2.4.0
       '@noble/hashes':
         specifier: 2.4.0
         version: 2.4.0
+      '@scure/base':
+        specifier: 2.4.0
+        version: 2.4.0
+      '@scure/btc-signer':
+        specifier: 2.4.1
+        version: 2.4.1
       '@simplewebauthn/server':
         specifier: 14.0.3
         version: 14.0.3
@@ -71,8 +77,8 @@ importers:
         specifier: 2.6.5
         version: 2.6.5
       '@nearpay-internal/testing':
-        specifier: 0.2.1
-        version: 0.2.1(bare-buffer@3.7.1)(zod@4.6.7)
+        specifier: 0.3.1
+        version: 0.3.1(bare-buffer@3.7.1)(zod@4.6.7)
       '@types/node':
         specifier: 22.20.5
         version: 22.20.5
@@ -434,66 +440,66 @@ packages:
     peerDependencies:
       '@near-js/types': ^2.0.1
 
-  '@nearpay-internal/auth@0.2.1':
-    resolution: {integrity: sha512-EIulgtWOitVe2qWsIKnIH0bhA023Kv9kci24aP1eHlK2QK7AZ/Mc9H93CzfSyyTts3A3gTU/7hYeY3TgcOGWoA==}
+  '@nearpay-internal/auth@0.3.1':
+    resolution: {integrity: sha512-CIvV2m+xtyo6bGzcPTwDrjNXNDS8Aa+oo1LzgolCputLaawDEZKgMaXRKEEpWmz86HqsIxbG5ze/DQvUjHNsdA==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
 
-  '@nearpay-internal/bus@0.2.1':
-    resolution: {integrity: sha512-vEAXNQEpDvlGzKZCPdcOUuCDrSIocIL3d41PXtwbGCPaH7BiExY+GuVCJDXqypvzVcG8dEG3VxFP87F7FJ84DQ==}
+  '@nearpay-internal/bus@0.3.1':
+    resolution: {integrity: sha512-fuvlEaFDGd+arzn++6xqt91ewCbSS0Pk0p4SxXetUWKVUDqfKGo03emyN3dEMAtlyW61mn+S779qq9YBWN+SjA==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
 
-  '@nearpay-internal/chains@0.2.1':
-    resolution: {integrity: sha512-2HGvrIRpUj3Yb55CXdQXvnQd3DtnFPsLtKixnijZQ4dnUIijRIIctlQcvf/kL7ZSNI+l9NkZfHMg7o52RbGkfw==}
+  '@nearpay-internal/chains@0.3.1':
+    resolution: {integrity: sha512-uLH6RNcI+RGj/ecp17XbgimcH5oXrvXP3HYn0E+PIkDkQB7l3LRtnyhQchX0GtBGq3uT1yZFXDe+ambz9xcQIw==}
     engines: {node: '>=22.11.0'}
 
-  '@nearpay-internal/db@0.2.1':
-    resolution: {integrity: sha512-nXB7UYMMNdrJpXBTlRP/qwG1bRXwiRS/OhO/DR9s3eOIxZ2yTgNFPI6iMC1yGdMZDiCTvuSewrwCPheopm5/1w==}
-    engines: {node: '>=22.11.0'}
-    peerDependencies:
-      zod: ^4.6.7
-
-  '@nearpay-internal/http@0.2.1':
-    resolution: {integrity: sha512-gXtHj/zBMpxlzErBRRTjidwE4yrLv+eztTrNbwloyVhOLbjDMPY1aprvLPwNsMrNDoIQgZGOfZyzpN/QTDIecA==}
+  '@nearpay-internal/db@0.3.1':
+    resolution: {integrity: sha512-bBxufINc3JJ4kmXDAdx7VNoEeHYV+kppmlBeVPzqitZoy8qcZBFpoH42gm9sNlSy956q+cEmBKfqIUTO0n3FHA==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
 
-  '@nearpay-internal/ids@0.2.1':
-    resolution: {integrity: sha512-6ao6+/1k19ckGK/rPCsaR8Ezo5MV1nEODAgek8JlXdqFVjRI6MuzZtcgcGBTFcAO73qtUt4pshvn+JcWgubSgQ==}
+  '@nearpay-internal/http@0.3.1':
+    resolution: {integrity: sha512-8A5FZL3qz2mVkuhAfqBtaX6H/Y7L3rUhEPdHDbSSQ3e0Kje8e817CsGF2Ie/W8QFix7sUQ2EAKI7Y54qYOriZg==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
 
-  '@nearpay-internal/intents@0.2.1':
-    resolution: {integrity: sha512-6iainIohaGhKocvlb7Xv9OK995Qi3kC5yHm8WgvHfXRfkJ8aglswzCnXC7YfsOz5P8ClIT5PKCRkI3qWIcNjKw==}
+  '@nearpay-internal/ids@0.3.1':
+    resolution: {integrity: sha512-20Q+aeHLZb9dHK+H4OVM7mEJ/DDlo1hJ43qmP/Jff5SG6pjXUf5ZEiVI0mUwSGxTvDgMvnlqXxmgEP9XJFXldA==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
 
-  '@nearpay-internal/service@0.2.1':
-    resolution: {integrity: sha512-AGbhUbGIuXfwUTmTJpE0YBzn+EgWlrRxspwf/bSMK8lhJh6bAoOHqsGIlFb5V6F8PwlJMqdi/CaQUdVg7dKuFw==}
+  '@nearpay-internal/intents@0.3.1':
+    resolution: {integrity: sha512-YvsU2YXuasUl23g3rFr3L5Zh5WEXXExorNKrZQg703T6dmeAoKZM6hnSbs3lYGEQ0O6bzgNr0h2aqRvr/E+50w==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
 
-  '@nearpay-internal/spec@0.3.0':
-    resolution: {integrity: sha512-f0/WOmMBo9wbSrPS4N9nhu1ddGP1VYPEkI2/JxV3DAkTG+tx+GfX9hNraX8vETjYfeMxcWtjluUDJNPQrHkgrQ==}
+  '@nearpay-internal/service@0.3.1':
+    resolution: {integrity: sha512-SQKH4kmlQkh9fUfIucVFLbv7owp600kNSEI93WYoms03O7N2f8kyMT5SuQziOID0L4vuJXZSACxFGyGIHAymfQ==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
 
-  '@nearpay-internal/testing@0.2.1':
-    resolution: {integrity: sha512-RktznE5kPBlVNoMtPThPKY19eQ9miTTML9D9pLEvfcgeCBzctICOVALxSp1xaCRSDKnbjzeoKu7KAfPEm7Eztw==}
+  '@nearpay-internal/spec@0.3.1':
+    resolution: {integrity: sha512-ccT36Q53oXxxuWo8qkTAU4jgzOrR7vyXs6/ljbDeR4JU1efp9HolWDEDtCvGAIbsd8oTYNOpz7M0+23DNKghoA==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
 
-  '@nearpay/spec@0.3.0':
-    resolution: {integrity: sha512-jBGwGvnN0E/CooJ3ixz3BFcG8xq/OR6Q4Hwj0+yo7hiYw0KcHE8zrbkwt4zCKE34QRMx11+3kHRriIFwgoAtJg==}
+  '@nearpay-internal/testing@0.3.1':
+    resolution: {integrity: sha512-3vmOlY7Z5UKQSJXkzqc3fpX3C1HucoA7lPJ2VGx6WiBpa+3cWxtQOaP9qFk0H5hTd+fb8cMK6ilqCcF9isFhng==}
+    engines: {node: '>=22.11.0'}
+    peerDependencies:
+      zod: ^4.6.7
+
+  '@nearpay/spec@0.3.1':
+    resolution: {integrity: sha512-1w/1jPXcekL6txxReb+6t+kGY5jBQiQg7qfr7mcMxtsErFxvivCqQNw01b9ghHq2tKJ7U3ZvvRVFN8BXcdvbxw==}
     engines: {node: '>=22.11.0'}
     peerDependencies:
       zod: ^4.6.7
@@ -803,6 +809,12 @@ packages:
 
   '@scure/base@1.2.6':
     resolution: {integrity: sha512-g/nm5FgUa//MCj1gV09zTJTaM6KBAHqLN907YVQqf7zC49+DcO4B1so4ZX07Ef10Twr6nuqYEH9GEggFXA4Fmg==}
+
+  '@scure/base@2.4.0':
+    resolution: {integrity: sha512-thZ1TuJwFwBblOhgsjDKvvGirBxNp+wSvY/DR6tJBJOTDhdAAcHJ8Vbr2eFnqaxeca4+t0i9KBf+uHYGWwZORg==}
+
+  '@scure/btc-signer@2.4.1':
+    resolution: {integrity: sha512-ch6h66o9nPhEoe/KciMMUJeH2MBPB8UAJI1if35Fxl6885lKTsc9YoCRqTW0/RjI0Vv9GSg1tmKtHHODyAw81g==}
 
   '@simplewebauthn/server@14.0.3':
     resolution: {integrity: sha512-D39/0fiDiYmGV+nraY9s63D1Ho2AX/waMLy22/9gUadTUuvbAnstfb4bpbHYbwZuV5ZLDYN1SmzDKuiHzKAA4Q==}
@@ -1358,6 +1370,10 @@ packages:
   make-dir@4.0.0:
     resolution: {integrity: sha512-hXdUTZYIVOt1Ex//jAQi+wTZZpUpwBj/0QsOzqegb3rGMMeJiSEu5xLHnYfBrRV4RH2+OCSOO95Is/7x1WJ4bw==}
     engines: {node: '>=10'}
+
+  micro-packed@0.11.1:
+    resolution: {integrity: sha512-agQGBnBCw8OoKQZMUxcaQPaOowdfxyEmBsq4CNAXAXCyB8KxlRG0lTl5GADJIsMEDaFb0trhXBHKYsjTWa5kuw==}
+    engines: {node: '>= 20.19.0'}
 
   minimalistic-assert@1.0.1:
     resolution: {integrity: sha512-UtJcAD4yEaGtjPezWuO9wC4nwUnVH/8/Im3yEHQP4b67cXlD/Qr9hdITCU1xDbSEXg2XKNaP8jsReV7vQd00/A==}
@@ -2185,28 +2201,28 @@ snapshots:
       depd: 2.0.0
       mustache: 4.0.0
 
-  '@nearpay-internal/auth@0.2.1(zod@4.6.7)':
+  '@nearpay-internal/auth@0.3.1(zod@4.6.7)':
     dependencies:
-      '@nearpay/spec': 0.3.0(zod@4.6.7)
+      '@nearpay/spec': 0.3.1(zod@4.6.7)
       jose: 6.2.15
       zod: 4.6.7
 
-  '@nearpay-internal/bus@0.2.1(zod@4.6.7)':
+  '@nearpay-internal/bus@0.3.1(zod@4.6.7)':
     dependencies:
       '@nats-io/jetstream': 3.4.0
       '@nats-io/transport-node': 3.4.0
-      '@nearpay-internal/spec': 0.3.0(zod@4.6.7)
+      '@nearpay-internal/spec': 0.3.1(zod@4.6.7)
       zod: 4.6.7
 
-  '@nearpay-internal/chains@0.2.1':
+  '@nearpay-internal/chains@0.3.1':
     dependencies:
       '@noble/hashes': 2.4.0
       bs58: 6.0.0
 
-  '@nearpay-internal/db@0.2.1(zod@4.6.7)':
+  '@nearpay-internal/db@0.3.1(zod@4.6.7)':
     dependencies:
-      '@nearpay-internal/ids': 0.2.1(zod@4.6.7)
-      '@nearpay-internal/spec': 0.3.0(zod@4.6.7)
+      '@nearpay-internal/ids': 0.3.1(zod@4.6.7)
+      '@nearpay-internal/spec': 0.3.1(zod@4.6.7)
       '@types/pg': 8.23.1
       kysely: 0.29.8
       pg: 8.23.1
@@ -2214,21 +2230,21 @@ snapshots:
     transitivePeerDependencies:
       - pg-native
 
-  '@nearpay-internal/http@0.2.1(zod@4.6.7)':
+  '@nearpay-internal/http@0.3.1(zod@4.6.7)':
     dependencies:
-      '@nearpay/spec': 0.3.0(zod@4.6.7)
+      '@nearpay/spec': 0.3.1(zod@4.6.7)
       zod: 4.6.7
 
-  '@nearpay-internal/ids@0.2.1(zod@4.6.7)':
+  '@nearpay-internal/ids@0.3.1(zod@4.6.7)':
     dependencies:
-      '@nearpay/spec': 0.3.0(zod@4.6.7)
+      '@nearpay/spec': 0.3.1(zod@4.6.7)
       zod: 4.6.7
 
-  '@nearpay-internal/intents@0.2.1(@near-js/types@2.5.1)(@near-js/utils@2.5.1(@near-js/types@2.5.1))(zod@4.6.7)':
+  '@nearpay-internal/intents@0.3.1(@near-js/types@2.5.1)(@near-js/utils@2.5.1(@near-js/types@2.5.1))(zod@4.6.7)':
     dependencies:
       '@near-js/crypto': 2.5.1(@near-js/types@2.5.1)(@near-js/utils@2.5.1(@near-js/types@2.5.1))
       '@near-js/transactions': 2.5.1(@near-js/crypto@2.5.1(@near-js/types@2.5.1)(@near-js/utils@2.5.1(@near-js/types@2.5.1)))(@near-js/types@2.5.1)(@near-js/utils@2.5.1(@near-js/types@2.5.1))
-      '@nearpay/spec': 0.3.0(zod@4.6.7)
+      '@nearpay/spec': 0.3.1(zod@4.6.7)
       '@noble/curves': 2.4.0
       '@noble/hashes': 2.4.0
       bs58: 6.0.0
@@ -2237,12 +2253,12 @@ snapshots:
       - '@near-js/types'
       - '@near-js/utils'
 
-  '@nearpay-internal/service@0.2.1(zod@4.6.7)':
+  '@nearpay-internal/service@0.3.1(zod@4.6.7)':
     dependencies:
-      '@nearpay-internal/auth': 0.2.1(zod@4.6.7)
-      '@nearpay-internal/http': 0.2.1(zod@4.6.7)
-      '@nearpay-internal/ids': 0.2.1(zod@4.6.7)
-      '@nearpay/spec': 0.3.0(zod@4.6.7)
+      '@nearpay-internal/auth': 0.3.1(zod@4.6.7)
+      '@nearpay-internal/http': 0.3.1(zod@4.6.7)
+      '@nearpay-internal/ids': 0.3.1(zod@4.6.7)
+      '@nearpay/spec': 0.3.1(zod@4.6.7)
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/exporter-trace-otlp-http': 0.223.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/resources': 2.12.0(@opentelemetry/api@1.9.1)
@@ -2252,19 +2268,19 @@ snapshots:
       prom-client: 15.1.3
       zod: 4.6.7
 
-  '@nearpay-internal/spec@0.3.0(zod@4.6.7)':
+  '@nearpay-internal/spec@0.3.1(zod@4.6.7)':
     dependencies:
-      '@nearpay/spec': 0.3.0(zod@4.6.7)
+      '@nearpay/spec': 0.3.1(zod@4.6.7)
       zod: 4.6.7
 
-  '@nearpay-internal/testing@0.2.1(bare-buffer@3.7.1)(zod@4.6.7)':
+  '@nearpay-internal/testing@0.3.1(bare-buffer@3.7.1)(zod@4.6.7)':
     dependencies:
       '@nats-io/transport-node': 3.4.0
-      '@nearpay-internal/auth': 0.2.1(zod@4.6.7)
-      '@nearpay-internal/ids': 0.2.1(zod@4.6.7)
-      '@nearpay-internal/service': 0.2.1(zod@4.6.7)
-      '@nearpay-internal/spec': 0.3.0(zod@4.6.7)
-      '@nearpay/spec': 0.3.0(zod@4.6.7)
+      '@nearpay-internal/auth': 0.3.1(zod@4.6.7)
+      '@nearpay-internal/ids': 0.3.1(zod@4.6.7)
+      '@nearpay-internal/service': 0.3.1(zod@4.6.7)
+      '@nearpay-internal/spec': 0.3.1(zod@4.6.7)
+      '@nearpay/spec': 0.3.1(zod@4.6.7)
       '@types/pg': 8.23.1
       pg: 8.23.1
       testcontainers: 11.14.0(bare-buffer@3.7.1)
@@ -2276,7 +2292,7 @@ snapshots:
       - react-native-b4a
       - supports-color
 
-  '@nearpay/spec@0.3.0(zod@4.6.7)':
+  '@nearpay/spec@0.3.1(zod@4.6.7)':
     dependencies:
       zod: 4.6.7
 
@@ -2577,6 +2593,15 @@ snapshots:
     optional: true
 
   '@scure/base@1.2.6': {}
+
+  '@scure/base@2.4.0': {}
+
+  '@scure/btc-signer@2.4.1':
+    dependencies:
+      '@noble/curves': 2.4.0
+      '@noble/hashes': 2.4.0
+      '@scure/base': 2.4.0
+      micro-packed: 0.11.1
 
   '@simplewebauthn/server@14.0.3':
     dependencies:
@@ -3210,6 +3235,10 @@ snapshots:
   make-dir@4.0.0:
     dependencies:
       semver: 7.8.6
+
+  micro-packed@0.11.1:
+    dependencies:
+      '@scure/base': 2.4.0
 
   minimalistic-assert@1.0.1: {}
 
