@@ -3,15 +3,19 @@
 import type { ServiceName } from "@nearpay/spec";
 import {
   acceptInvitation,
+  approveCliLogin,
   approveSettlementDestination,
   attestSettlementDestination,
   challengeSettlementDestination,
   createApiKey,
+  createCliLogin,
   createInvitation,
   createSettlementDestination,
+  denyCliLogin,
   disableSettlementDestination,
   getAccount,
   getAccountRequirements,
+  getCliLogin,
   getDashboardSession,
   getSettlementDestination,
   listAccountAuditEvents,
@@ -25,6 +29,7 @@ import {
   passkeyAuthenticationVerify,
   passkeyRegistrationOptions,
   passkeyRegistrationVerify,
+  pollCliLogin,
   removeMember,
   revokeApiKey,
   revokeInvitation,
@@ -71,6 +76,7 @@ import { createKey, listKeys, revokeKey, rollKey, updateKey } from "../app/api-k
 import * as audits from "../app/audit.js";
 import * as auth from "../app/auth.js";
 import { authorize, type Touches } from "../app/authz.js";
+import * as cli from "../app/cli-logins.js";
 import * as consoleAuth from "../app/console.js";
 import type { Actor, Identity } from "../app/context.js";
 import {
@@ -220,6 +226,26 @@ export function identityRoutes(id: Identity, deps: RouteDeps): RouteBinding[] {
       const p = principal(ctx);
       return updateKey(id, p.acct, p.lm === true, ctx.params.id, ctx.body, actorOf(id, ctx));
     }),
+
+    // ---- CLI login (Stage 3, §6.2) ------------------------------------------------------------------
+    implement(createCliLogin, async (ctx) =>
+      respond(
+        201,
+        await cli.createCliLogin(id, ctx.body, {
+          ip: meta(id, ctx).ip,
+          country: header(ctx, "cf-ipcountry"),
+          userAgent: header(ctx, "user-agent"),
+        }),
+      ),
+    ),
+    implement(pollCliLogin, async (ctx) => cli.pollCliLogin(id, ctx.body.device_code)),
+    implement(getCliLogin, async (ctx) => cli.getCliLogin(id, principal(ctx).acct, ctx.params.code)),
+    implement(approveCliLogin, async (ctx) =>
+      cli.approveCliLogin(id, principal(ctx).acct, ctx.params.code, actorOf(id, ctx)),
+    ),
+    implement(denyCliLogin, async (ctx) =>
+      cli.denyCliLogin(id, principal(ctx).acct, ctx.params.code, actorOf(id, ctx)),
+    ),
 
     // ---- settlement destinations ---------------------------------------------------------------------
     implement(listSettlementDestinations, async (ctx) => {

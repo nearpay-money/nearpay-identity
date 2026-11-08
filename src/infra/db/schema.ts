@@ -1,4 +1,4 @@
-/** Kysely table types (migrations/0001…0004). */
+/** Kysely table types (migrations/0001…0007). */
 import type { ColumnType, Generated, KitTables } from "@nearpay-internal/db";
 
 type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
@@ -315,7 +315,33 @@ export interface AuditEventsTable {
   target_id: string | null;
   details: Json<Record<string, unknown>>;
   ip_enc: Buffer | null;
+  /** Migration 0007: where the action was requested from when that differs from the actor (CLI login IP). */
+  origin_ip_enc: ColumnType<Buffer | null, Buffer | null | undefined, Buffer | null>;
   created_at: Timestamp;
+}
+
+export type CliLoginStatus = "pending" | "approved" | "denied" | "expired" | "redeemed";
+
+/** Migration 0007 (lld/identity.md §6.2). */
+export interface CliLoginsTable {
+  id: string;
+  device_code_sha256: Buffer;
+  user_code: string;
+  device_name: string;
+  client_version: string | null;
+  ip_enc: Buffer | null;
+  country: string | null;
+  user_agent: string | null;
+  status: ColumnType<CliLoginStatus, CliLoginStatus | undefined, CliLoginStatus>;
+  account_id: string | null;
+  key_id: string | null;
+  key_secret_enc: Buffer | null;
+  approved_by: string | null;
+  decided_at: NullableTimestamp;
+  created_at: Timestamp;
+  expires_at: Timestamp;
+  last_polled_at: NullableTimestamp;
+  updated_at: Timestamp;
 }
 
 export interface IdentityTables {
@@ -338,6 +364,7 @@ export interface IdentityTables {
   invitations: InvitationsTable;
   destination_approvals: DestinationApprovalsTable;
   manager_grants: ManagerGrantsTable;
+  cli_logins: CliLoginsTable;
 }
 
 export type DB = IdentityTables & KitTables;
