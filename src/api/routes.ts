@@ -47,6 +47,7 @@ import { toUuid } from "@nearpay-internal/ids";
 import { ApiError, implement, type RequestContext, type RouteBinding, respond } from "@nearpay-internal/service";
 import {
   authorize as authorizeRoute,
+  getInternalOpsOperator,
   getInternalSettlementDestination,
   getJwks,
   getNotificationRecipients,
@@ -83,7 +84,7 @@ import {
   listDestinations,
   setDefaultDestination,
 } from "../app/destinations.js";
-import { notificationRecipients, settlementContext } from "../app/internal.js";
+import { internalOpsOperator, notificationRecipients, settlementContext } from "../app/internal.js";
 import * as team from "../app/team.js";
 import { authenticateClient } from "../app/tokens.js";
 import { clientIp } from "../domain/authz/authz.js";
@@ -327,6 +328,9 @@ export function identityRoutes(id: Identity, deps: RouteDeps): RouteBinding[] {
     }),
     implement(getSettlementContext, async (ctx) => settlementContext(id, ctx.params.id, ctx.query.livemode)),
     implement(getInternalSettlementDestination, async (ctx) => getInternalDestination(id, ctx.params.id)),
-    implement(getNotificationRecipients, async (ctx) => notificationRecipients(id, ctx.params.id, ctx.query.kind)),
+    implement(getNotificationRecipients, async (ctx) =>
+      notificationRecipients(id, ctx.params.id, ctx.query.kind, ctx.query.user),
+    ),
+    implement(getInternalOpsOperator, async (ctx) => internalOpsOperator(id, ctx.params.id)),
   ];
 }

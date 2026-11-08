@@ -49,8 +49,8 @@ describe("routes and events", () => {
     }
   });
 
-  it("is built against spec 0.2.0; Stage 1 routes keep their shape", () => {
-    expect(SPEC_VERSION).toBe("0.2.0");
+  it("is built against spec 0.2.1; Stage 1 routes keep their shape", () => {
+    expect(SPEC_VERSION).toBe("0.2.1");
     const bound = identityRoutes({} as never, { touches: {} as never, serviceClients: new Map() }).map(
       (b) => b.route.id,
     );
@@ -180,6 +180,22 @@ describe("sentinel registry view", () => {
       "destination_approvals_complete",
       "destination_approvals_no_update",
     ]);
+  });
+  it("migration 0006 (spec 0.2.1): website, user recovery columns, the expired reason", async () => {
+    const cols = await sql<{ table_name: string; column_name: string }>`
+      select table_name, column_name from information_schema.columns
+      where (table_name = 'accounts' and column_name = 'website')
+         or (table_name = 'users' and column_name in ('recovered_at', 'recovery_count'))
+      order by table_name, column_name`.execute(s.admin.db);
+    expect(cols.rows.map((c) => `${c.table_name}.${c.column_name}`)).toEqual([
+      "accounts.website",
+      "users.recovered_at",
+      "users.recovery_count",
+    ]);
+    const check = await sql<{ def: string }>`
+      select pg_get_constraintdef(oid) as def from pg_constraint
+      where conname = 'settlement_destinations_disabled_reason_check'`.execute(s.admin.db);
+    expect(check.rows[0]?.def).toContain("expired");
   });
   it("the audit log is append-only even for the app role", async () => {
     await s.admin.db

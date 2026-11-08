@@ -6,7 +6,9 @@
 import { sql } from "@nearpay-internal/db";
 import { toUuid } from "@nearpay-internal/ids";
 import { sendMessage } from "@nearpay-internal/spec";
+import { mintServiceToken } from "@nearpay-internal/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { notificationRecipients } from "../../src/app/internal.js";
 import { type Stack, startStack } from "../support/stack.js";
 import { as, invite, joinByInvite, mailedToken, signIn, signUp, stepUp, type User } from "../support/users.js";
 
@@ -177,6 +179,8 @@ describe("members", () => {
         ["boss@members.test", "owner"],
       ],
     );
+    // spec 0.2.1: a security summary per member (dashboard passkeys, last recovery)
+    for (const m of list.body.data) expect(m.security).toEqual({ passkeys: 1, recovered_at: null });
 
     await stepUp(s, shop);
     const lastOwner = await s.gateway(
@@ -237,5 +241,25 @@ describe("members", () => {
       expect.arrayContaining(["member.invited", "member.joined", "member.removed"]),
     );
     expect(JSON.stringify(audit)).not.toMatch(/@members\.test/);
+
+    // spec 0.2.1 `?user=`: one member in any role (kind not applied); a member removed in the last
+    // 7 days still answers with the role they had (notify mails them); anyone else → empty
+    const token = await mintServiceToken("notify");
+    const one = (user: string, kind = "billing") =>
+      s.direct("GET", `/internal/accounts/${shop.accountId}/notification-recipients?kind=${kind}&user=${user}`, {
+        token,
+      });
+    expect((await one(admin.userId)).body).toEqual({
+      recipients: [{ user_id: admin.userId, email: "adm@members.test", role: "owner" }],
+    });
+    expect((await one(shop.userId)).body).toEqual({
+      recipients: [{ user_id: shop.userId, email: "boss@members.test", role: "admin" }],
+    });
+    const stranger = await signUp(s, "stranger@members.test", "Other Shop");
+    expect((await one(stranger.userId)).body).toEqual({ recipients: [] });
+    // eight days later (audit rows are append-only: move the clock instead)
+    const later = { ...s.identity, now: () => Date.now() + 8 * 86_400_000 };
+    expect(await notificationRecipients(later, shop.accountId, "security", shop.userId)).toEqual({ recipients: [] });
+    expect((await notificationRecipients(later, shop.accountId, "security", admin.userId)).recipients).toHaveLength(1);
   });
 });

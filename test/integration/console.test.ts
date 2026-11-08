@@ -5,7 +5,7 @@
  * audit trail and the KYB-driven legal name (worker consumers).
  */
 import { toUuid } from "@nearpay-internal/ids";
-import { domainEvent } from "@nearpay-internal/testing";
+import { domainEvent, mintServiceToken } from "@nearpay-internal/testing";
 import { decodeJwt } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runOps } from "../../src/ops/cli.js";
@@ -97,13 +97,12 @@ describe("enrolment and sign-in", () => {
     expect((await s.gateway("GET", "/ops/merchants", { cookie: merchant.cookie })).status).toBe(403);
     // dashboard passkeys do not sign in to the console, console keys do
     const o = await ops("POST", "/ops/auth/passkeys/authentication/options", { body: {} });
-    expect(
-      (
-        await ops("POST", "/ops/auth/passkeys/authentication/verify", {
-          body: { credential: merchant.passkey.get(o.body) },
-        })
-      ).body.error.code,
-    ).toBe("webauthn_failed");
+    const refused = await ops("POST", "/ops/auth/passkeys/authentication/verify", {
+      body: { credential: merchant.passkey.get(o.body) },
+    });
+    // catalogue status (spec 0.2.1 kept 400; the route text once said 401)
+    expect(refused.status).toBe(400);
+    expect(refused.body.error.code).toBe("webauthn_failed");
     const o2 = await ops("POST", "/ops/auth/passkeys/authentication/options", { body: {} });
     const signIn = await ops("POST", "/ops/auth/passkeys/authentication/verify", {
       body: { credential: op.key.get(o2.body) },
@@ -148,10 +147,22 @@ describe("enrolment and sign-in", () => {
     expect(audit.body.data[0]).toMatchObject({ actor: { type: "operator", id: op.id }, account: null });
   });
 
-  it("revoked operators lose the console", async () => {
+  it("revoked operators lose the console; getInternalOpsOperator reports them inactive (spec 0.2.1)", async () => {
+    const token = await mintServiceToken("compliance");
+    const read = (id: string, t = token) => s.direct("GET", `/internal/ops_operators/${id}`, { token: t });
+    const active = await read(op.id);
+    expect(active.status, JSON.stringify(active.body)).toBe(200);
+    expect(active.body).toMatchObject({ user_id: op.id, role: "ops_admin", active: true, revoked_at: null });
+    expect(JSON.stringify(active.body)).not.toContain("@");
+    expect((await read(merchant.userId)).status).toBe(404);
+    expect((await read(op.id, await mintServiceToken("notify"))).status).toBe(403);
+
     await runOps(["operator-revoke", "op@nearpay.test"], s.identity, { actor: "t", out: () => {}, err: () => {} });
     s.identity.cache.local<object>("sessions", 10_000).clear();
     expect((await ops("GET", "/ops/auth/session", { cookie: op.cookie })).status).toBe(401);
+    const revoked = await read(op.id);
+    expect(revoked.body).toMatchObject({ user_id: op.id, active: false });
+    expect(typeof revoked.body.revoked_at).toBe("string");
   });
 });
 

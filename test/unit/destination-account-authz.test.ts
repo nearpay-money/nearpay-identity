@@ -1,6 +1,6 @@
 import { PUBLIC_ROUTES } from "@nearpay/spec";
 import { describe, expect, it } from "vitest";
-import { applyPatch, DEFAULT_SETTINGS, SettingError } from "../../src/domain/account/account.js";
+import { applyPatch, DEFAULT_SETTINGS, SettingError, withSettingDefaults } from "../../src/domain/account/account.js";
 import {
   anonymousAllowed,
   clientIp,
@@ -105,7 +105,13 @@ describe("destination state machine", () => {
 });
 
 describe("account settings", () => {
-  const current = { display_name: "Acme", country: null, fee_bearer: "payer" as const, settings: DEFAULT_SETTINGS };
+  const current = {
+    display_name: "Acme",
+    country: null,
+    website: null,
+    fee_bearer: "payer" as const,
+    settings: DEFAULT_SETTINGS,
+  };
   it("detects money-behaviour changes (step-up required)", () => {
     expect(applyPatch(current, { fee_bearer: "merchant" }).moneyChanged).toBe(true);
     expect(applyPatch(current, { settings: { late_payments: true } }).moneyChanged).toBe(true);
@@ -116,7 +122,12 @@ describe("account settings", () => {
   });
   it("merges branding and validates the logo URL", () => {
     const r = applyPatch(current, { settings: { branding: { accent_color: "#112233" } } });
-    expect(r.next.settings.branding).toEqual({ accent_color: "#112233", logo_url: null });
+    expect(r.next.settings.branding).toEqual({
+      accent_color: "#112233",
+      logo_url: null,
+      theme: "auto",
+      corner_radius: 8,
+    });
     const cleared = applyPatch(
       {
         ...current,
@@ -128,6 +139,46 @@ describe("account settings", () => {
     );
     expect(cleared.next.settings.branding).toEqual({ accent_color: null, logo_url: null });
     expect(() => applyPatch(current, { settings: { branding: { logo_url: "http://x/l.png" } } })).toThrow(SettingError);
+  });
+  it("spec 0.2.1: website, theme and corner radius (no step-up; validated; older rows keep no keys)", () => {
+    const r = applyPatch(current, {
+      website: "https://shop.example.com",
+      settings: { branding: { theme: "dark", corner_radius: 0 } },
+    });
+    expect(r).toMatchObject({ moneyChanged: false, changed: true });
+    expect(r.next.website).toBe("https://shop.example.com");
+    expect(r.next.settings.branding).toMatchObject({ theme: "dark", corner_radius: 0 });
+    expect(applyPatch(r.next, { website: null }).next.website).toBeNull();
+    expect(applyPatch(r.next, { settings: { branding: { corner_radius: 24 } } }).next.settings.branding).toMatchObject({
+      theme: "dark",
+      corner_radius: 24,
+    });
+    const bad = (p: Parameters<typeof applyPatch>[1], param: string) => {
+      try {
+        applyPatch(current, p);
+        throw new Error("accepted");
+      } catch (e) {
+        expect(e).toBeInstanceOf(SettingError);
+        expect((e as SettingError).param).toBe(param);
+      }
+    };
+    bad({ website: "http://shop.example.com" }, "website");
+    bad({ settings: { branding: { theme: "sepia" } } }, "settings[branding][theme]");
+    bad({ settings: { branding: { corner_radius: 25 } } }, "settings[branding][corner_radius]");
+    bad({ settings: { branding: { corner_radius: 1.5 } } }, "settings[branding][corner_radius]");
+    bad({ settings: { branding: { corner_radius: -1 } } }, "settings[branding][corner_radius]");
+    // a pre-0.2.1 row: no theme/corner_radius keys until set, defaults filled on read
+    const old = { ...current, settings: { ...DEFAULT_SETTINGS, branding: { accent_color: null, logo_url: null } } };
+    expect(applyPatch(old, { display_name: "Acme 3" }).next.settings.branding).toEqual({
+      accent_color: null,
+      logo_url: null,
+    });
+    expect(withSettingDefaults(old.settings).branding).toEqual({
+      accent_color: null,
+      logo_url: null,
+      theme: "auto",
+      corner_radius: 8,
+    });
   });
 });
 

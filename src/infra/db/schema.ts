@@ -35,7 +35,13 @@ export type AccountSettingsRow = {
   underpay_tolerance_bps: number;
   session_ttl_default: number;
   email_receipts: boolean;
-  branding: { accent_color: string | null; logo_url: string | null };
+  /** `theme` / `corner_radius` from spec 0.2.1; absent on older rows (views fill the defaults). */
+  branding: {
+    accent_color: string | null;
+    logo_url: string | null;
+    theme?: "auto" | "light" | "dark";
+    corner_radius?: number;
+  };
 };
 
 export type AccountStatus = "active" | "suspended" | "closed";
@@ -54,6 +60,8 @@ export interface AccountsTable {
   api_version: string;
   settings: Json<AccountSettingsRow>;
   recovered_at: NullableTimestamp;
+  /** Migration 0006 (spec 0.2.1 `Account.website`). */
+  website: Generated<string | null>;
   kyb_source_version: Generated<number>;
   status_source_version: Generated<number>;
   created_at: Timestamp;
@@ -69,6 +77,10 @@ export interface UsersTable {
   status: Generated<"active" | "disabled">;
   created_at: Timestamp;
   last_login_at: NullableTimestamp;
+  /** Migration 0006: last email recovery (`Member.security.recovered_at`). */
+  recovered_at: Generated<Date | null>;
+  /** Migration 0006: recoveries so far (`evt.identity.user.recovered` aggregate version). */
+  recovery_count: Generated<number>;
 }
 
 export type Role = "owner" | "admin" | "developer" | "finance" | "support" | "viewer";
@@ -245,7 +257,7 @@ export interface SettlementDestinationsTable {
   screening_id: string | null;
   created_by: string;
   disabled_at: NullableTimestamp;
-  disabled_reason: "merchant" | "compliance" | "replaced" | null;
+  disabled_reason: "merchant" | "compliance" | "replaced" | "expired" | null;
   created_at: Timestamp;
   updated_at: Timestamp;
   version: Generated<number>;

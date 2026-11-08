@@ -5,7 +5,7 @@
  * registration token → hardware-passkey registration on the console host (RP id = console host,
  * attestation `direct`, AAGUID allow-list, device-bound) → console session `__Host-np_ops`
  * (30 min idle / 12 h absolute; sign-in counts as a step-up). Only `kind = 'ops'` passkeys of active
- * operators sign in or step up; every refusal is `401 webauthn_failed` (no enumeration). Every
+ * operators sign in or step up; every refusal is `400 webauthn_failed` (catalogue status) (no enumeration). Every
  * console sign-in action is audited with `actor_type = operator`.
  */
 

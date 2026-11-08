@@ -4,6 +4,7 @@
  */
 import { fromUuid, toUuid } from "@nearpay-internal/ids";
 import { ApiError } from "@nearpay-internal/service";
+import type { Role } from "../infra/db/schema.js";
 import type { Identity } from "./context.js";
 import { accountView, internalDestinationView } from "./views.js";
 
@@ -61,10 +62,19 @@ const KIND_ROLES = {
   billing: ["owner", "finance"],
 } as const;
 
-export async function notificationRecipients(id: Identity, accountId: string, kind: keyof typeof KIND_ROLES) {
+/** How long a removed member is still found by `?user=` (notify mails them about their removal). */
+export const REMOVED_MEMBER_WINDOW_MS = 7 * 86_400_000;
+
+export async function notificationRecipients(
+  id: Identity,
+  accountId: string,
+  kind: keyof typeof KIND_ROLES,
+  user?: string | undefined,
+) {
   const acct = toUuid(accountId, "acct");
   const account = await id.db.selectFrom("accounts").select("id").where("id", "=", acct).executeTakeFirst();
   if (!account) throw ApiError.missing("account", accountId, "id");
+  if (user !== undefined) return { recipients: await oneRecipient(id, acct, user) };
   const rows = await id.db
     .selectFrom("memberships")
     .innerJoin("users", "users.id", "memberships.user_id")
@@ -76,4 +86,63 @@ export async function notificationRecipients(id: Identity, accountId: string, ki
     .orderBy("memberships.created_at")
     .execute();
   return { recipients: rows.map((r) => ({ user_id: fromUuid("usr", r.id), email: r.email, role: r.role })) };
+}
+
+/**
+ * `?user=` (spec 0.2.1): that user only, in any role (`kind` not applied): a current member, or a member
+ * removed from this account in the last 7 days with the role they had (identity LLD "Spec 0.2.1":
+ * notify mails the removed member, whose membership row is already gone). Otherwise an empty list.
+ * Only active users with a verified email, like the role lists.
+ */
+async function oneRecipient(id: Identity, acct: string, userId: string) {
+  const userUuid = toUuid(userId, "usr");
+  const u = await id.db
+    .selectFrom("users")
+    .select(["id", "email"])
+    .where("id", "=", userUuid)
+    .where("status", "=", "active")
+    .where("email_verified_at", "is not", null)
+    .executeTakeFirst();
+  if (!u) return [];
+  const m = await id.db
+    .selectFrom("memberships")
+    .select("role")
+    .where("account_id", "=", acct)
+    .where("user_id", "=", userUuid)
+    .executeTakeFirst();
+  let role = m?.role;
+  if (!role) {
+    const removed = await id.db
+      .selectFrom("audit_events")
+      .select("details")
+      .where("account_id", "=", acct)
+      .where("action", "=", "member.removed")
+      .where("target_id", "=", fromUuid("usr", userUuid))
+      .where("created_at", ">", new Date(id.now() - REMOVED_MEMBER_WINDOW_MS))
+      .orderBy("created_at", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    const r = (removed?.details as { role?: unknown } | undefined)?.role;
+    if (typeof r === "string" && (ROLES as readonly string[]).includes(r)) role = r as Role;
+  }
+  return role ? [{ user_id: fromUuid("usr", u.id), email: u.email, role }] : [];
+}
+
+const ROLES = ["owner", "admin", "developer", "finance", "support", "viewer"] as const;
+
+/** `getInternalOpsOperator` (spec 0.2.1, compliance's assignee check): never an operator → 404. */
+export async function internalOpsOperator(id: Identity, userId: string) {
+  const o = await id.db
+    .selectFrom("ops_operators")
+    .selectAll()
+    .where("user_id", "=", toUuid(userId, "usr"))
+    .executeTakeFirst();
+  if (!o) throw ApiError.missing("ops_operator", userId, "id");
+  return {
+    user_id: fromUuid("usr", o.user_id),
+    role: o.role,
+    active: o.revoked_at === null,
+    created_at: o.created_at.toISOString(),
+    revoked_at: o.revoked_at ? o.revoked_at.toISOString() : null,
+  };
 }
