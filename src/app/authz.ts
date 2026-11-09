@@ -43,14 +43,22 @@ import {
   TOUCH_EVERY_MS,
 } from "../domain/session/session.js";
 import type { CachedKey } from "../infra/cache.js";
-import type { Identity } from "./context.js";
+import { accessCsrfValid, accessStepUpUntil, verifyAccess } from "./console-access.js";
+import { accessMode, type Identity } from "./context.js";
+import { activeAdminCount, activeOperatorByEmail } from "./operators.js";
 
 const match = routeMatcher(PUBLIC_ROUTES as readonly RouteRef[]);
 /** Console host: only `/ops/*` routes (spec `OPS_ROUTES`) are routed there (§8.1 step 3). */
 const matchOps = routeMatcher(OPS_ROUTES as readonly RouteRef[]);
 
 /** Request-token claims; `ops_role` (spec 0.2.0 `InternalTokenClaims`) rides along for ops principals. */
-export type MintedClaims = ClaimsInput & { ops_role?: OpsRole };
+export type MintedClaims = ClaimsInput & {
+  ops_role?: OpsRole;
+  /** Adaptive two-person rule (app/operators.ts): active `ops_admin` operators now. */
+  ops_admins?: number;
+  /** Unix seconds of the operator's last user verification (passkey step-up/sign-in, or Access login). */
+  ops_auth_at?: number;
+};
 
 export interface AuthzHeaders {
   method?: string | undefined;
@@ -65,6 +73,8 @@ export interface AuthzHeaders {
   /** TCP peer of identity (the gateway); forwarding headers count only from a trusted proxy. */
   peer?: string | undefined;
   cfConnectingIp?: string | undefined;
+  /** `Cf-Access-Jwt-Assertion` (console host, `NP_OPS_AUTH_MODE=cloudflare_access`). */
+  cfAccessJwt?: string | undefined;
 }
 
 interface AccountState {
@@ -264,7 +274,30 @@ async function decide(id: Identity, h: AuthzHeaders, touch: Touches) {
   const bearer = /^Bearer\s+(\S+)$/i.exec(h.authorization?.trim() ?? "")?.[1];
   // merchant credentials never reach console routes
   if (bearer && consoleHost) throw deny("permission_denied", "API keys cannot call console routes.");
-  if (bearer) {
+  if (consoleHost && accessMode(id.console)) {
+    // ---- console through Cloudflare Access: only a verified assertion, never a cookie or anonymous ----
+    const v = id.console.access;
+    if (!v) throw deny("authentication_required", "Cloudflare Access is not configured.");
+    const who = await verifyAccess(v, h.cfAccessJwt, Math.floor(now / 1000));
+    if (!who) throw deny("authentication_required", "A valid Cloudflare Access assertion is required.");
+    const op = await activeOperatorByEmail(id.db, who.email);
+    if (!op) throw deny("permission_denied", "This account is not an enrolled NearPay operator.");
+    const sub = fromUuid("usr", op.user_id);
+    if (unsafe && !accessCsrfValid(v, sub, who.iat, h.csrf)) throw new ApiError("csrf_token_invalid");
+    const stepUp = accessStepUpUntil(who.iat, Math.floor(now / 1000));
+    claims = {
+      sub,
+      ptype: "ops",
+      ops_role: op.role,
+      scp: [...OPS_ROLE_SCOPES[op.role]],
+      rid: requestId,
+      ...(stepUp ? { step_up_until: stepUp } : {}),
+      ops_admins: await activeAdminCount(id.db),
+      ops_auth_at: who.iat,
+    };
+    rateKey = `usr:${op.user_id}`;
+    rateClass = "test";
+  } else if (bearer) {
     // ---- API key -----------------------------------------------------------------------------
     const shape = parseKey(bearer);
     const k = shape ? await keyRecord(id, bearer) : null;
@@ -322,6 +355,9 @@ async function decide(id: Identity, h: AuthzHeaders, touch: Touches) {
           scp: [...OPS_ROLE_SCOPES[s.operator]],
           rid: requestId,
           ...(stepUp ? { step_up_until: stepUp } : {}),
+          // adaptive two-person rule: identity's count and the last verification (sign-in counts as one)
+          ops_admins: await activeAdminCount(id.db),
+          ...(s.step_up_at ? { ops_auth_at: Math.floor(s.step_up_at / 1000) } : {}),
         };
       } else {
         if (!s.account_id || !s.role) throw deny("authentication_required");

@@ -35,7 +35,7 @@ import {
   startValkey,
   testSigningKey,
 } from "@nearpay-internal/testing";
-import type { Identity } from "../../src/app/context.js";
+import type { ConsoleConfig, Identity } from "../../src/app/context.js";
 import { createApi, createWorker } from "../../src/app/services.js";
 import { signerFrom } from "../../src/app/tokens.js";
 import type { ApiConfig, WorkerConfig } from "../../src/config.js";
@@ -66,6 +66,8 @@ export interface GatewayRequest {
   host?: string;
   /** Extra request headers passed to the service after authz (e.g. `idempotency-key`). */
   headers?: Record<string, string>;
+  /** `Cf-Access-Jwt-Assertion` (Cloudflare Access console mode), sent to authz and the route. */
+  accessJwt?: string;
 }
 
 export interface Response {
@@ -105,6 +107,8 @@ export interface StackOptions {
   worker?: boolean;
   cooloffSeconds?: number;
   now?: () => number;
+  /** Console settings over the test defaults (platform passkeys, Cloudflare Access mode, …). */
+  console?: Partial<ConsoleConfig>;
 }
 
 /** Default mock answers: every asset/chain supported, screening allows, mail accepted. */
@@ -251,10 +255,18 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     notifyUrl: (notify as MockPeer).url,
     nearRpcUrls: ["https://rpc.invalid"],
     evmRpcUrls: {},
+    opsAllowPlatformPasskeys: false,
+    opsAuthMode: "passkey",
   };
   const apiCache = createAuthzCache({ valkeyUrl: valkey.url });
   const { service: api, identity } = createApi(apiConfig, {
-    console: { origin: OPS_ORIGIN, rpId: OPS_HOST, aaguids: new Set([TEST_AAGUID]), attestationRoots: [] },
+    console: {
+      origin: OPS_ORIGIN,
+      rpId: OPS_HOST,
+      aaguids: new Set([TEST_AAGUID]),
+      attestationRoots: [],
+      ...o.console,
+    },
     database: apiDb,
     signer,
     peers,
@@ -321,6 +333,7 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
       if (r.csrf) fwd["x-csrf-token"] = r.csrf;
       if (r.bearer) fwd.authorization = `Bearer ${r.bearer}`;
       if (r.mode) fwd["nearpay-mode"] = r.mode;
+      if (r.accessJwt) fwd["cf-access-jwt-assertion"] = r.accessJwt;
       const authz = await inject("GET", "/internal/authz", fwd);
       if (authz.status !== 200) return authz;
       const token = authz.headers["x-nearpay-token"] as string;
@@ -330,6 +343,7 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
         host: r.host ?? "dashboard.nearpay.localhost",
         "x-forwarded-for": ip,
         ...(r.cookie ? { cookie: r.cookie } : {}),
+        ...(r.accessJwt ? { "cf-access-jwt-assertion": r.accessJwt } : {}),
         ...r.headers,
       };
       return inject(method, path, headers, r.body);

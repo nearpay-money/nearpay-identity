@@ -49,7 +49,9 @@ import { MIGRATIONS_DIR } from "../infra/db/migrations.js";
 import type { DB } from "../infra/db/schema.js";
 import { jobHandlers, RECURRING } from "../workers/jobs.js";
 import { touches } from "./authz.js";
-import { type ConsoleConfig, type Identity, identityMetrics, NO_CONSOLE } from "./context.js";
+import { announceConsole, announceCooloff } from "./boot.js";
+import { accessMode, type ConsoleConfig, type Identity, identityMetrics, NO_CONSOLE } from "./context.js";
+import { bootstrapOperator } from "./operators.js";
 import { loadServiceClients, loadSigner, type Signer } from "./tokens.js";
 
 export interface ServiceDeps {
@@ -188,6 +190,21 @@ export function createApi(config: ApiConfig, deps: ServiceDeps = {}): { service:
   });
   id.log = service.log;
   id.metrics = identityMetrics(service.metrics);
+  announceConsole(service.log, service.metrics, id);
+  announceCooloff(service.log, service.metrics, config);
+  const bootstrapEmail = id.console.bootstrapEmail;
+  if (accessMode(id.console) && bootstrapEmail)
+    service.addBackground({
+      name: "ops-bootstrap",
+      start() {
+        // the first operator of a platform that never had one (Access mode, NP_OPS_BOOTSTRAP_EMAIL)
+        void bootstrapOperator(id, bootstrapEmail).then(
+          (op) => op && service.log.warn({ operator: op }, "first console operator bootstrapped (ops_admin)"),
+          (e) => service.log.error({ err: e }, "operator bootstrap failed"),
+        );
+        return { async stop() {} };
+      },
+    });
   service.addBackground({
     name: "touch-flush",
     start() {
@@ -237,6 +254,7 @@ export async function createWorker(
   const service = createService({ name: "identity", config, readiness: readiness(database) });
   id.log = service.log;
   id.metrics = identityMetrics(service.metrics);
+  announceCooloff(service.log, service.metrics, config);
 
   const bus = deps.bus ?? (await connectBus({ url: config.natsUrl, name: `identity-worker@${hostname()}` }));
   await ensureStreams(bus, [STREAMS.identity]);

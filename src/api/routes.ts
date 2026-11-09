@@ -119,6 +119,7 @@ function meta(id: Identity, ctx: RequestContext): auth.RequestMeta {
     ),
     userAgent: header(ctx, "user-agent"),
     cookie: header(ctx, "cookie"),
+    accessJwt: header(ctx, "cf-access-jwt-assertion"),
   };
 }
 
@@ -342,6 +343,7 @@ export function identityRoutes(id: Identity, deps: RouteDeps): RouteBinding[] {
           xForwardedFor: header(ctx, "x-forwarded-for"),
           cfConnectingIp: header(ctx, "cf-connecting-ip"),
           peer: ctx.request.socket?.remoteAddress,
+          cfAccessJwt: header(ctx, "cf-access-jwt-assertion"),
         },
         deps.touches,
       );

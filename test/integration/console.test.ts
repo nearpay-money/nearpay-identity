@@ -252,4 +252,31 @@ describe("worker consumers", () => {
     const mine = await s.gateway("GET", "/v1/account/audit_events?limit=100", as(merchant));
     expect(mine.body.data.map((x: { action: string }) => x.action)).not.toContain("kill_switch.engaged");
   });
+
+  it("a two-person action completed by a single operator keeps its single_operator marker", async () => {
+    const actionId = "019a6000-0000-7000-8000-00000000abce";
+    await s.publishEvent(
+      domainEvent(
+        "evt.compliance.ops_action.recorded",
+        {
+          id: actionId,
+          actor: { sub: merchant.userId, ops_role: "ops_admin" },
+          action: "ops_approval.approved_single_operator",
+          target: { type: "ops_approval", id: "opa_01m701vavvegsv8st5rmt7k54h" },
+          account_id: merchant.accountId,
+          approval: "opa_01m701vavvegsv8st5rmt7k54h",
+          occurred_at: new Date().toISOString(),
+          single_operator: true,
+        },
+        { accountUuid: null, livemode: null, version: 1 },
+      ),
+    );
+    const row = await eventually(async () =>
+      s.admin.db.selectFrom("audit_events").selectAll().where("id", "=", actionId).executeTakeFirst(),
+    );
+    expect(row).toMatchObject({
+      action: "ops_approval.approved_single_operator",
+      details: { source: "compliance", single_operator: true },
+    });
+  });
 });

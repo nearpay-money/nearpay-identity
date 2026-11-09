@@ -37,3 +37,20 @@ export function authenticatorProblem(f: AuthenticatorFacts): string | null {
   if (strict && !f.rootsConfigured) return "no attestation trust anchors are configured";
   return null;
 }
+
+/**
+ * BETA ONLY (`NP_OPS_ALLOW_PLATFORM_PASSKEYS=true`; remove before the VPS — lld/identity.md §6.1 "Beta:
+ * platform passkeys"). A passkey the hardware policy above refuses may still register when the flag is on:
+ * the relaxation covers only the authenticator attachment, the synced / backup-eligible check and the
+ * attestation / AAGUID requirement. User verification stays required (the WebAuthn verification enforces
+ * it) and so does a discoverable (resident) credential: a client that reports `credProps.rk = false` is
+ * refused. Returns why it is refused, or null.
+ */
+export function platformPasskeyProblem(f: { readonly allowed: boolean; readonly residentKey: boolean | undefined }) {
+  if (!f.allowed) return "platform passkeys are not accepted";
+  if (f.residentKey === false) return "the passkey is not discoverable (resident key required)";
+  return null;
+}
+
+/** How an operator passkey was admitted: `hardware` (policy above) or `platform_beta`. */
+export type OpsPasskeyPolicy = "hardware" | "platform_beta";
