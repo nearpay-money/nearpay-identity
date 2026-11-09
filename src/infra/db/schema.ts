@@ -141,6 +141,8 @@ export interface PasskeysTable {
   kind: Generated<"dashboard" | "ops">;
   created_at: Timestamp;
   last_used_at: NullableTimestamp;
+  /** Migration 0009: how an `ops` passkey was admitted (`platform_beta`: NP_OPS_ALLOW_PLATFORM_PASSKEYS). */
+  ops_policy: ColumnType<"hardware" | "platform_beta" | null, "hardware" | "platform_beta" | null | undefined, never>;
 }
 
 export interface SessionsTable {
@@ -309,6 +311,14 @@ export interface OpsOperatorsTable {
   role: "ops" | "ops_admin";
   created_at: Timestamp;
   revoked_at: NullableTimestamp;
+  /** Migration 0009: the operator's latest console passkey — policy, attachment, synced, when. */
+  passkey_policy: ColumnType<"hardware" | "platform_beta" | null, "hardware" | "platform_beta" | null | undefined>;
+  passkey_attachment: ColumnType<
+    "platform" | "cross-platform" | null,
+    "platform" | "cross-platform" | null | undefined
+  >;
+  passkey_synced: ColumnType<boolean | null, boolean | null | undefined>;
+  passkey_registered_at: NullableTimestamp;
 }
 
 export type AuditActorType = "user" | "api_key" | "service" | "ops" | "operator" | "system";

@@ -44,7 +44,11 @@ try {
         recoveryLockMs: 0,
         dashboardOrigin: "",
         webauthn: { rpId: "", rpName: "NearPay", origins: [] },
-        console: { ...NO_CONSOLE, origin: config.opsOrigin?.replace(/\/$/, "") ?? null },
+        console: {
+          ...NO_CONSOLE,
+          origin: config.opsOrigin?.replace(/\/$/, "") ?? null,
+          authMode: config.opsAuthMode,
+        },
         lookups: {
           nearAccessKey: () => {
             throw new Error("not available in the ops CLI");

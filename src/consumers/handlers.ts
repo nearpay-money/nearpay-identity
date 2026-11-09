@@ -75,7 +75,13 @@ export function identityHandlers(id: Identity, deps: ConsumerDeps): Partial<Reco
           action: a.action,
           target_type: a.target.type,
           target_id: a.target.id,
-          details: JSON.stringify({ ops_role: a.actor.ops_role, approval: a.approval, source }),
+          details: JSON.stringify({
+            ops_role: a.actor.ops_role,
+            approval: a.approval,
+            source,
+            // adaptive two-person rule: the requester completed a two-person action alone
+            ...((a as { single_operator?: unknown }).single_operator === true ? { single_operator: true } : {}),
+          }),
           created_at: a.occurred_at,
         })
         .onConflict((oc) => oc.column("id").doNothing())

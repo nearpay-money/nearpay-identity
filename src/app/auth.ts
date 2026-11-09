@@ -55,6 +55,8 @@ export interface RequestMeta {
   readonly ip: string | null;
   readonly userAgent: string | undefined;
   readonly cookie: string | undefined;
+  /** `Cf-Access-Jwt-Assertion` (console, `NP_OPS_AUTH_MODE=cloudflare_access`). */
+  readonly accessJwt?: string | undefined;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -699,6 +701,9 @@ async function verifyAssertion(
   if (userUuid) q = q.where("user_id", "=", userUuid);
   const pk = await q.forUpdate().executeTakeFirst();
   if (!pk) throw failed("unknown passkey");
+  // a beta platform passkey (NP_OPS_ALLOW_PLATFORM_PASSKEYS) signs in and steps up only while the flag is on
+  if (pk.ops_policy === "platform_beta" && id.console.allowPlatformPasskeys !== true)
+    throw failed("platform passkeys are not accepted");
   let r: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
   try {
     r = await verifyAuthenticationResponse({

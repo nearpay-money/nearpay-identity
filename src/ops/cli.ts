@@ -11,8 +11,9 @@ import { ApiError } from "@nearpay-internal/service";
 import { createKey, revokeKey } from "../app/api-keys.js";
 import { DEFAULT_FEE_SCHEDULE } from "../app/auth.js";
 import { sendEnrolment } from "../app/console.js";
-import { audit, dbNow, emitEvent, type Identity } from "../app/context.js";
+import { accessMode, audit, dbNow, emitEvent, type Identity } from "../app/context.js";
 import { ACTIVATE_JOB, createDestination } from "../app/destinations.js";
+import { activeAdminCount, operatorUser } from "../app/operators.js";
 import { accountView } from "../app/views.js";
 import { DEFAULT_SETTINGS } from "../domain/account/account.js";
 import { isDevEnv } from "../domain/env.js";
@@ -20,8 +21,10 @@ import { isDevEnv } from "../domain/env.js";
 export const USAGE = `usage: ops.js <command> [arguments] [--actor <name>]
 
   account-show <acct_… | email>
-  operator-add <email> ops|ops_admin       (emails a 24 h console enrolment link; NP_OPS_ORIGIN)
+  operator-add <email> ops|ops_admin       (emails a 24 h console enrolment link; NP_OPS_ORIGIN —
+                                            NP_OPS_AUTH_MODE=cloudflare_access: enrolled by email, no link)
   operator-revoke <email>
+  operator-list                            (active and revoked operators, their passkey policy, the two-person mode)
   destination-cooloff-skip <sd_…>          (NP_ENV=local only)
   seed-demo [--email <email>] [--name <display name>] [--destination <near account>]   (NP_ENV=local only)`;
 
@@ -111,11 +114,7 @@ export async function runOps(argv: readonly string[], id: Identity, deps: OpsDep
         if (role !== "ops" && role !== "ops_admin") throw new UsageError("role must be ops or ops_admin");
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new UsageError("not an email address");
         // operators need no merchant account: the user is created when missing (email verified at enrolment)
-        const u = await withTx(id.db, async (tx) => {
-          const existing = await tx.selectFrom("users").selectAll().where("email", "=", email).executeTakeFirst();
-          if (existing) return existing;
-          return tx.insertInto("users").values({ id: uuidv7(), email }).returningAll().executeTakeFirstOrThrow();
-        });
+        const u = await withTx(id.db, (tx) => operatorUser(tx, email));
         await withTx(id.db, async (tx) => {
           await tx
             .insertInto("ops_operators")
@@ -127,12 +126,61 @@ export async function runOps(argv: readonly string[], id: Identity, deps: OpsDep
             actor,
             action: "operator.added",
             target: { type: "user", id: fromUuid("usr", u.id) },
-            details: { role },
+            details: { role, auth_mode: accessMode(id.console) ? "cloudflare_access" : "passkey" },
           });
         });
+        if (accessMode(id.console)) {
+          // Cloudflare Access mode: the operator signs in with this email through Access (add it to the
+          // Access policy too); there is no passkey to enrol
+          print({ user: fromUuid("usr", u.id), role, enrolment: "by email (Cloudflare Access)" });
+          return 0;
+        }
         // the 24 h enrolment link for the operator's hardware key (console host)
         await sendEnrolment(id, { id: u.id, email: u.email }, role);
         print({ user: fromUuid("usr", u.id), role, enrolment: "sent (24 h link)" });
+        return 0;
+      }
+      case "operator-list": {
+        const rows = await id.db
+          .selectFrom("ops_operators")
+          .innerJoin("users", "users.id", "ops_operators.user_id")
+          .select([
+            "ops_operators.user_id",
+            "users.email",
+            "users.status",
+            "ops_operators.role",
+            "ops_operators.created_at",
+            "ops_operators.revoked_at",
+            "ops_operators.passkey_policy",
+            "ops_operators.passkey_attachment",
+            "ops_operators.passkey_synced",
+            "ops_operators.passkey_registered_at",
+          ])
+          .orderBy("ops_operators.created_at")
+          .execute();
+        const admins = await activeAdminCount(id.db);
+        print({
+          auth_mode: accessMode(id.console) ? "cloudflare_access" : "passkey",
+          // adaptive two-person rule: a second operator is required while two or more can approve
+          two_person: admins >= 2 ? "required (2+ active ops_admin)" : "single operator (1 active ops_admin)",
+          active_ops_admins: admins,
+          operators: rows.map((r) => ({
+            user: fromUuid("usr", r.user_id),
+            email: r.email,
+            role: r.role,
+            active: r.revoked_at === null && r.status === "active",
+            revoked_at: r.revoked_at?.toISOString() ?? null,
+            passkey: r.passkey_policy
+              ? {
+                  policy: r.passkey_policy,
+                  label: r.passkey_policy === "platform_beta" ? "platform passkey — beta" : "hardware security key",
+                  attachment: r.passkey_attachment,
+                  synced: r.passkey_synced,
+                  registered_at: r.passkey_registered_at?.toISOString() ?? null,
+                }
+              : null,
+          })),
+        });
         return 0;
       }
       case "operator-revoke": {

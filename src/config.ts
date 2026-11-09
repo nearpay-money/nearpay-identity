@@ -1,10 +1,15 @@
 /** Configuration (lld/identity.md §11, foundations §13). */
 import { readFileSync } from "node:fs";
-import { baseConfigShape, list, loadConfig, secret, url } from "@nearpay-internal/service";
+import { parseKek } from "@nearpay-internal/db";
+import { baseConfigShape, flag, list, loadConfig, secret, url } from "@nearpay-internal/service";
+import type { JWTVerifyGetKey } from "jose";
 import { z } from "zod";
+import { accessVerifier, deriveCsrfKey, normalizeTeamDomain } from "./app/console-access.js";
 import type { ConsoleConfig } from "./app/context.js";
 import { CLIENT_IP_HEADERS, clientIpRule } from "./domain/client-ip.js";
 import { isDevEnv } from "./domain/env.js";
+
+export const OPS_AUTH_MODES = ["passkey", "cloudflare_access"] as const;
 
 const shared = {
   ...baseConfigShape,
@@ -18,7 +23,12 @@ const shared = {
   clientIpHeader: z.enum(CLIENT_IP_HEADERS).optional(),
   /** CIDRs of the proxies in front of identity whose forwarding headers count (default: loopback + private ranges). */
   trustedProxies: list(z.string().min(1)).optional(),
-  /** 86 400 s; 0 is allowed only when NP_ENV=local (checked in readConfig). */
+  /**
+   * Cool-off of a new settlement destination, seconds (default 86 400). 0 is allowed on every stage (owner
+   * decision 2026-11-09: a business accepting payments must not wait); the boot log warns and the gauge
+   * `nearpay_identity_destination_cooloff_seconds` shows the value. Ownership attestation, step-up, the
+   * two-approver rule and the audit stay.
+   */
   cooloffSeconds: z.coerce
     .number()
     .int()
@@ -48,6 +58,19 @@ export const apiShape = {
   opsAaguidAllowlistFile: z.string().min(1).optional(),
   /** PEM bundle of attestation roots (vendor CAs) operator-key attestations must chain to; required on the server stage. */
   opsAttestationRootsFile: z.string().min(1).optional(),
+  /**
+   * BETA ONLY (remove before the VPS): operator passkeys may be platform / synced passkeys (Touch ID,
+   * iCloud Keychain, Google Password Manager; attestation `none`). UV and resident keys stay required.
+   */
+  opsAllowPlatformPasskeys: flag(false),
+  /** Console sign-in: `passkey` (hardware keys, default) or `cloudflare_access` (Google login through Access). */
+  opsAuthMode: z.enum(OPS_AUTH_MODES).default("passkey"),
+  /** Access application audience tag (`aud`); required in `cloudflare_access` mode. */
+  cfAccessAud: z.string().min(1).max(256).optional(),
+  /** Access team domain (`<team>.cloudflareaccess.com`); required in `cloudflare_access` mode. */
+  cfAccessTeamDomain: z.string().min(1).max(253).optional(),
+  /** Access mode: the first operator (`ops_admin`), enrolled at boot while there is none. */
+  opsBootstrapEmail: z.email().optional(),
   /** `{"<chain id>": ["https://…"]}` for ERC-1271 contract-wallet attestations (optional). */
   evmRpcUrls: z
     .string()
@@ -81,6 +104,8 @@ export const opsShape = {
   opsActor: z.string().min(1).max(100).optional(),
   /** Console origin for enrolment links (`<origin>/auth/enrol#token=…`). */
   opsOrigin: url(["https:", "http:"]).optional(),
+  /** `cloudflare_access`: operators are enrolled by email only (no passkey enrolment link). */
+  opsAuthMode: z.enum(OPS_AUTH_MODES).default("passkey"),
 };
 
 export const migrateShape = { ...baseConfigShape, dbUrl: secret(url(["postgres:", "postgresql:"])) };
@@ -89,10 +114,26 @@ export type ApiConfig = z.output<z.ZodObject<typeof apiShape>>;
 export type WorkerConfig = z.output<z.ZodObject<typeof workerShape>>;
 export type OpsConfig = z.output<z.ZodObject<typeof opsShape>>;
 
-/** A zero cool-off would let a stolen session redirect live funds at once: local stacks only. */
-export function checkCooloff(c: { env: string; cooloffSeconds: number }): void {
-  if (c.cooloffSeconds === 0 && !isDevEnv(c.env))
-    throw new Error("NP_COOLOFF_SECONDS=0 is allowed only when NP_ENV=local");
+/**
+ * The cool-off may be anything from 0 to 30 days on every stage (owner decision 2026-11-09). A short one
+ * is reported at boot (warn) — the other protections (ownership attestation, step-up, two approvers,
+ * audit, the activation security email) stay. Returns the boot log line, or null for the default.
+ */
+export function cooloffNotice(c: { env: string; cooloffSeconds: number }): string | null {
+  if (c.cooloffSeconds >= 86_400) return null;
+  return `NP_COOLOFF_SECONDS=${c.cooloffSeconds}: new settlement destinations activate ${
+    c.cooloffSeconds === 0 ? "as soon as they are attested and approved" : `${c.cooloffSeconds} s after attestation`
+  } (default 86400); attestation, step-up, two approvers and the activation security email still apply`;
+}
+
+/** `cloudflare_access` needs the Access audience and team domain (the console would refuse everything otherwise). */
+export function checkConsoleAuth(
+  c: Pick<ApiConfig, "opsAuthMode" | "cfAccessAud" | "cfAccessTeamDomain" | "opsBootstrapEmail">,
+): void {
+  if (c.opsAuthMode !== "cloudflare_access") return;
+  if (!c.cfAccessAud || !c.cfAccessTeamDomain)
+    throw new Error("NP_OPS_AUTH_MODE=cloudflare_access needs NP_CF_ACCESS_AUD and NP_CF_ACCESS_TEAM_DOMAIN");
+  normalizeTeamDomain(c.cfAccessTeamDomain);
 }
 
 /**
@@ -123,18 +164,40 @@ export function parsePemBundle(text: string): string[] {
   return [...text.matchAll(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g)].map((m) => `${m[0]}\n`);
 }
 
-export function consoleConfig(c: {
-  env: string;
-  opsOrigin?: string | undefined;
-  opsAaguidAllowlistFile?: string | undefined;
-  opsAttestationRootsFile?: string | undefined;
-}): ConsoleConfig {
+export function consoleConfig(
+  c: {
+    env: string;
+    piiKek?: string;
+    opsOrigin?: string | undefined;
+    opsAaguidAllowlistFile?: string | undefined;
+    opsAttestationRootsFile?: string | undefined;
+    opsAllowPlatformPasskeys?: boolean | undefined;
+    opsAuthMode?: (typeof OPS_AUTH_MODES)[number] | undefined;
+    cfAccessAud?: string | undefined;
+    cfAccessTeamDomain?: string | undefined;
+    opsBootstrapEmail?: string | undefined;
+  },
+  accessKeys?: JWTVerifyGetKey,
+): ConsoleConfig {
   const origin = c.opsOrigin ? c.opsOrigin.replace(/\/$/, "") : null;
+  const access = c.opsAuthMode === "cloudflare_access";
   return {
     origin,
     rpId: origin ? new URL(origin).hostname : null,
     aaguids: c.opsAaguidAllowlistFile ? parseAaguids(readFileSync(c.opsAaguidAllowlistFile, "utf8"), c.env) : new Set(),
     attestationRoots: c.opsAttestationRootsFile ? parsePemBundle(readFileSync(c.opsAttestationRootsFile, "utf8")) : [],
+    allowPlatformPasskeys: c.opsAllowPlatformPasskeys === true,
+    authMode: access ? "cloudflare_access" : "passkey",
+    access:
+      access && c.cfAccessAud && c.cfAccessTeamDomain && c.piiKek
+        ? accessVerifier({
+            teamDomain: c.cfAccessTeamDomain,
+            audience: c.cfAccessAud,
+            csrfKey: deriveCsrfKey(parseKek(c.piiKek)),
+            ...(accessKeys ? { keys: accessKeys } : {}),
+          })
+        : null,
+    bootstrapEmail: access && c.opsBootstrapEmail ? c.opsBootstrapEmail.toLowerCase() : null,
   };
 }
 
@@ -177,14 +240,10 @@ export function checkServerConfig(
 
 export const readApiConfig = () => {
   const c = loadConfig(apiShape);
-  checkCooloff(c);
   checkServerConfig(c);
+  checkConsoleAuth(c);
   clientIpRule(c.env, { header: c.clientIpHeader, trustedProxies: c.trustedProxies }); // a bad CIDR fails at boot
   return c;
 };
-export const readWorkerConfig = () => {
-  const c = loadConfig(workerShape);
-  checkCooloff(c);
-  return c;
-};
+export const readWorkerConfig = () => loadConfig(workerShape);
 export const readOpsConfig = () => loadConfig(opsShape);

@@ -7,6 +7,11 @@
  * (30 min idle / 12 h absolute; sign-in counts as a step-up). Only `kind = 'ops'` passkeys of active
  * operators sign in or step up; every refusal is `400 webauthn_failed` (catalogue status) (no enumeration). Every
  * console sign-in action is audited with `actor_type = operator`.
+ *
+ * `NP_OPS_AUTH_MODE=cloudflare_access` replaces all of the above with Cloudflare Access (Google login):
+ * authz mints the ops token from the verified Access assertion (app/console-access.ts); here the session
+ * view is built from it, logout only audits, and every passkey ceremony is refused.
+ * `NP_OPS_ALLOW_PLATFORM_PASSKEYS=true` (BETA ONLY) admits platform / synced passkeys at registration.
  */
 
 import { withTx } from "@nearpay-internal/db";
@@ -18,7 +23,7 @@ import {
   verifyRegistrationResponse,
 } from "@simplewebauthn/server";
 import { decodeAttestationObject } from "@simplewebauthn/server/helpers";
-import { authenticatorProblem } from "../domain/console/console.js";
+import { authenticatorProblem, type OpsPasskeyPolicy, platformPasskeyProblem } from "../domain/console/console.js";
 import {
   clearCookie,
   idleExpiresAt,
@@ -43,7 +48,9 @@ import {
   userPasskeys,
   verifyAssertion,
 } from "./auth.js";
-import { audit, dbNow, type Identity, type Tx } from "./context.js";
+import { ACCESS_REAUTH_URL, accessCsrf, accessStepUpUntil, verifyAccess } from "./console-access.js";
+import { accessMode, audit, dbNow, type Identity, type Tx } from "./context.js";
+import { activeOperatorByEmail } from "./operators.js";
 
 export const ENROLMENT_MS = 24 * 3_600_000;
 
@@ -57,6 +64,14 @@ function rp(id: Identity) {
 }
 
 const unix = (d: Date) => Math.floor(d.getTime() / 1000);
+
+/** Passkey ceremonies do not exist in Cloudflare Access mode. */
+function passkeyMode(id: Identity) {
+  if (accessMode(id.console))
+    throw new ApiError("authenticator_not_allowed", {
+      message: "The console signs in with Cloudflare Access; operator passkeys are not used.",
+    });
+}
 const operatorActor = (userUuid: string, ip: string | null) => ({
   type: "operator" as const,
   id: fromUuid("usr", userUuid),
@@ -67,7 +82,14 @@ async function activeOperator(db: Identity["db"] | Tx, userUuid: string) {
   return db
     .selectFrom("ops_operators")
     .innerJoin("users", "users.id", "ops_operators.user_id")
-    .select(["ops_operators.role", "users.email", "users.status"])
+    .select([
+      "ops_operators.role",
+      "users.email",
+      "users.status",
+      "ops_operators.passkey_policy",
+      "ops_operators.passkey_attachment",
+      "ops_operators.passkey_synced",
+    ])
     .where("ops_operators.user_id", "=", userUuid)
     .where("ops_operators.revoked_at", "is", null)
     .executeTakeFirst();
@@ -84,6 +106,18 @@ async function opsSessionBody(
   if (op?.status !== "active") throw new ApiError("authentication_required");
   const until = stepUpUntil(s.step_up_at, id.now());
   return {
+    // extensions (open object, not in the spec): the auth mode, and how the operator's passkey was admitted
+    auth_mode: "passkey" as const,
+    ...(op.passkey_policy
+      ? {
+          passkey: {
+            policy: op.passkey_policy,
+            attachment: op.passkey_attachment,
+            synced: op.passkey_synced,
+            ...(op.passkey_policy === "platform_beta" ? { label: "platform passkey — beta" } : {}),
+          },
+        }
+      : {}),
     object: "ops_session" as const,
     operator: { id: fromUuid("usr", s.user_id), email: op.email },
     role: op.role,
@@ -137,6 +171,7 @@ export async function sendEnrolment(id: Identity, user: { id: string; email: str
 
 /** `opsEnrolmentVerify`: unknown, used and expired links and revoked operators all answer alike. */
 export async function enrolmentVerify(id: Identity, token: string) {
+  passkeyMode(id);
   return withTx(id.db, async (tx) => {
     const link = await tx
       .selectFrom("magic_links")
@@ -171,6 +206,8 @@ export async function enrolmentVerify(id: Identity, token: string) {
       registration_token: registration,
       email: link.email,
       expires_at: unix(expires),
+      // extension (beta only): the console then offers platform passkeys instead of insisting on a key
+      ...(id.console.allowPlatformPasskeys ? { platform_passkeys_allowed: true } : {}),
     };
   });
 }
@@ -185,6 +222,7 @@ async function liveEnrolment(db: Identity["db"] | Tx, token: string, now: number
 }
 
 export async function registrationOptions(id: Identity, b: { registration_token: string }) {
+  passkeyMode(id);
   const party = rp(id);
   if (!party) throw new ApiError("authenticator_not_allowed");
   const r = await liveEnrolment(id.db, b.registration_token, id.now());
@@ -198,11 +236,10 @@ export async function registrationOptions(id: Identity, b: { registration_token:
     timeout: CEREMONY_MS,
     attestationType: "direct",
     excludeCredentials: existing.map((p) => ({ id: p.credential_id.toString("base64url"), transports: p.transports })),
-    authenticatorSelection: {
-      authenticatorAttachment: "cross-platform",
-      residentKey: "required",
-      userVerification: "required",
-    },
+    // beta (NP_OPS_ALLOW_PLATFORM_PASSKEYS): no attachment preference, so Touch ID / phone passkeys are offered
+    authenticatorSelection: id.console.allowPlatformPasskeys
+      ? { residentKey: "required", userVerification: "required" }
+      : { authenticatorAttachment: "cross-platform", residentKey: "required", userVerification: "required" },
     supportedAlgorithmIDs: [-8, -7, -257],
   });
   await storeChallenge(id, options.challenge, {
@@ -218,6 +255,7 @@ export async function registrationVerify(
   b: { registration_token: string; credential: RegistrationCredential; passkey_name?: string | undefined },
   meta: RequestMeta,
 ) {
+  passkeyMode(id);
   const party = rp(id);
   if (!party) throw new ApiError("authenticator_not_allowed");
   const challenge = challengeOf(b.credential.response.clientDataJSON);
@@ -238,19 +276,31 @@ export async function registrationVerify(
   if (!verified.verified) throw failed("the attestation did not verify");
   const info = verified.registrationInfo;
   const att = decodeAttestationObject(new Uint8Array(info.attestationObject));
+  const synced = info.credentialDeviceType === "multiDevice" || info.credentialBackedUp;
   const problem = authenticatorProblem({
     env: id.env,
     fmt: info.fmt,
     hasX5c: Array.isArray(att.get("attStmt").get("x5c")) && (att.get("attStmt").get("x5c") as unknown[]).length > 0,
     aaguid: info.aaguid,
-    synced: info.credentialDeviceType === "multiDevice" || info.credentialBackedUp,
+    synced,
     allowlist: id.console.aaguids,
     rootsConfigured: id.console.attestationRoots.length > 0,
   });
+  let policy: OpsPasskeyPolicy = "hardware";
   if (problem) {
-    id.log.warn({ aaguid: info.aaguid, fmt: info.fmt, reason: problem }, "operator key refused");
-    throw new ApiError("authenticator_not_allowed");
+    // beta only: a platform / synced passkey (UV verified above; resident key still required)
+    const rk = (b.credential.clientExtensionResults as { credProps?: { rk?: boolean } } | undefined)?.credProps?.rk;
+    const beta = platformPasskeyProblem({ allowed: id.console.allowPlatformPasskeys === true, residentKey: rk });
+    if (beta) {
+      id.log.warn({ aaguid: info.aaguid, fmt: info.fmt, reason: problem, beta }, "operator key refused");
+      throw new ApiError("authenticator_not_allowed");
+    }
+    policy = "platform_beta";
   }
+  const attachment =
+    b.credential.authenticatorAttachment === "platform" || b.credential.authenticatorAttachment === "cross-platform"
+      ? b.credential.authenticatorAttachment
+      : null;
 
   const out = await withTx(id.db, async (tx) => {
     const c = await takeChallenge(tx, challenge, "ops_registration");
@@ -282,9 +332,21 @@ export async function registrationVerify(
         transports: info.credential.transports ?? b.credential.response.transports ?? [],
         aaguid: info.aaguid.toLowerCase(),
         backed_up: info.credentialBackedUp,
-        name: b.passkey_name ?? "Security key",
+        name: b.passkey_name ?? (policy === "platform_beta" ? "Platform passkey" : "Security key"),
         kind: "ops",
+        ops_policy: policy,
       })
+      .execute();
+    // the operator record shows how their console passkey was admitted (console session, ops CLI)
+    await tx
+      .updateTable("ops_operators")
+      .set({
+        passkey_policy: policy,
+        passkey_attachment: attachment,
+        passkey_synced: synced,
+        passkey_registered_at: now,
+      })
+      .where("user_id", "=", reg.user_id)
       .execute();
     await tx
       .updateTable("users")
@@ -296,8 +358,23 @@ export async function registrationVerify(
       actor: operatorActor(reg.user_id, meta.ip),
       action: "ops.enrolled",
       target: { type: "user", id: fromUuid("usr", reg.user_id) },
-      details: { role: op.role, aaguid: info.aaguid.toLowerCase(), fmt: info.fmt },
+      details: { role: op.role, aaguid: info.aaguid.toLowerCase(), fmt: info.fmt, passkey_policy: policy },
     });
+    if (policy === "platform_beta")
+      await audit(id, tx, {
+        accountUuid: null,
+        actor: operatorActor(reg.user_id, meta.ip),
+        action: "ops.passkey_platform_registered",
+        target: { type: "user", id: fromUuid("usr", reg.user_id) },
+        details: {
+          beta: true,
+          flag: "NP_OPS_ALLOW_PLATFORM_PASSKEYS",
+          attachment,
+          synced,
+          fmt: info.fmt,
+          aaguid: info.aaguid.toLowerCase(),
+        },
+      });
     return newOpsSession(id, tx, reg.user_id, meta);
   });
   return respond(200, out.body, { "set-cookie": out.cookie });
@@ -308,6 +385,7 @@ export async function registrationVerify(
 // ---------------------------------------------------------------------------------------------
 
 export async function authenticationOptions(id: Identity, meta: RequestMeta) {
+  passkeyMode(id);
   const party = rp(id);
   // no console configured: still answer, every verification then fails (no configuration leak)
   const options = await generateAuthenticationOptions({
@@ -323,6 +401,7 @@ export async function authenticationOptions(id: Identity, meta: RequestMeta) {
 }
 
 export async function authenticationVerify(id: Identity, credential: Credential, meta: RequestMeta) {
+  passkeyMode(id);
   const party = rp(id);
   try {
     if (!party) throw failed("the console is not configured");
@@ -367,6 +446,7 @@ async function currentOpsSession(id: Identity, db: Identity["db"] | Tx, meta: Re
 }
 
 export async function stepUpOptions(id: Identity, principal: { sub: string }, meta: RequestMeta) {
+  passkeyMode(id);
   const party = rp(id);
   const s = await currentOpsSession(id, id.db, meta, principal.sub);
   const keys = await userPasskeys(id, s.user_id, "ops");
@@ -386,6 +466,7 @@ export async function stepUpVerify(
   credential: Credential,
   meta: RequestMeta,
 ) {
+  passkeyMode(id);
   const party = rp(id);
   try {
     if (!party) throw failed("the console is not configured");
@@ -417,11 +498,59 @@ export async function stepUpVerify(
   }
 }
 
+/**
+ * Access mode: the console session is the verified Access login (authz already checked it; it is verified
+ * again here for its times). The sign-in is audited once per Access login (deterministic event id).
+ */
+async function accessSession(id: Identity, principal: { sub: string }, meta: RequestMeta) {
+  const v = id.console.access;
+  const nowS = Math.floor(id.now() / 1000);
+  const who = v ? await verifyAccess(v, meta.accessJwt, nowS) : null;
+  if (!v || !who) throw new ApiError("authentication_required");
+  const op = await activeOperatorByEmail(id.db, who.email);
+  if (!op || fromUuid("usr", op.user_id) !== principal.sub) throw new ApiError("authentication_required");
+  await audit(id, id.db, {
+    accountUuid: null,
+    actor: operatorActor(op.user_id, meta.ip),
+    action: "ops.signed_in",
+    details: { role: op.role, auth_mode: "cloudflare_access", access_iat: who.iat },
+    eventId: accessSignInEventId(op.user_id, who.iat),
+  });
+  return {
+    auth_mode: "cloudflare_access" as const,
+    reauth_url: ACCESS_REAUTH_URL,
+    object: "ops_session" as const,
+    operator: { id: principal.sub, email: op.email },
+    role: op.role,
+    csrf_token: accessCsrf(v, principal.sub, who.iat),
+    step_up_until: accessStepUpUntil(who.iat, nowS) ?? null,
+    idle_expires_at: who.exp,
+    expires_at: who.exp,
+  };
+}
+
+/** One audit event per Access login: a UUID (v8 layout) derived from the operator and the login time. */
+export function accessSignInEventId(userUuid: string, iat: number): string {
+  const h = sha256(`ops-access-signin:${userUuid}:${iat}`).toString("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-8${h.slice(13, 16)}-${((Number.parseInt(h.slice(16, 17), 16) & 3) | 8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
 export async function getOpsSession(id: Identity, principal: { sub: string }, meta: RequestMeta) {
+  if (accessMode(id.console)) return accessSession(id, principal, meta);
   return opsSessionBody(id, id.db, await currentOpsSession(id, id.db, meta, principal.sub));
 }
 
 export async function logout(id: Identity, principal: { sub: string }, meta: RequestMeta) {
+  if (accessMode(id.console)) {
+    // the Access login ends at Cloudflare (`/cdn-cgi/access/logout`); identity records the sign-out
+    await audit(id, id.db, {
+      accountUuid: null,
+      actor: { type: "operator", id: principal.sub, ip: meta.ip },
+      action: "ops.signed_out",
+      details: { auth_mode: "cloudflare_access" },
+    });
+    return respond(204, undefined, {});
+  }
   const s = await currentOpsSession(id, id.db, meta, principal.sub);
   await withTx(id.db, async (tx) => {
     await tx

@@ -11,6 +11,7 @@ import type { Peers } from "../infra/clients/peers.js";
 import type { TurnstileVerifier } from "../infra/clients/turnstile.js";
 import type { OwnershipLookups } from "../infra/crypto/attestation.js";
 import type { DB } from "../infra/db/schema.js";
+import type { AccessVerifier } from "./console-access.js";
 import type { Signer } from "./tokens.js";
 
 export interface IdentityMetrics {
@@ -20,6 +21,9 @@ export interface IdentityMetrics {
   attestationFailure(standard: string): void;
   loginFailure(): void;
 }
+
+/** Labels of `nearpay_ops_beta_flag{flag}`. */
+export const BETA_FLAGS = ["NP_OPS_ALLOW_PLATFORM_PASSKEYS", "NP_OPS_AUTH_MODE=cloudflare_access"] as const;
 
 export const noMetrics: IdentityMetrics = {
   authz() {},
@@ -67,9 +71,33 @@ export interface ConsoleConfig {
   readonly aaguids: ReadonlySet<string>;
   /** PEM root certificates attestation chains must lead to (required when NP_ENV=server). */
   readonly attestationRoots: readonly string[];
+  /**
+   * BETA ONLY (`NP_OPS_ALLOW_PLATFORM_PASSKEYS=true`, remove before the VPS): operator passkeys may be
+   * platform / synced passkeys (Touch ID, iCloud Keychain, Google Password Manager; attestation `none`).
+   * User verification and resident keys stay required. Default false.
+   */
+  readonly allowPlatformPasskeys?: boolean;
+  /** `NP_OPS_AUTH_MODE`: `passkey` (default) or `cloudflare_access` (app/console-access.ts). */
+  readonly authMode?: "passkey" | "cloudflare_access";
+  /** Access verification (required in `cloudflare_access` mode). */
+  readonly access?: AccessVerifier | null;
+  /** `NP_OPS_BOOTSTRAP_EMAIL` (Access mode): the first operator, enrolled at boot while there is none. */
+  readonly bootstrapEmail?: string | null;
 }
 
-export const NO_CONSOLE: ConsoleConfig = { origin: null, rpId: null, aaguids: new Set(), attestationRoots: [] };
+export const NO_CONSOLE: ConsoleConfig = {
+  origin: null,
+  rpId: null,
+  aaguids: new Set(),
+  attestationRoots: [],
+  allowPlatformPasskeys: false,
+  authMode: "passkey",
+  access: null,
+  bootstrapEmail: null,
+};
+
+/** The console signs in through Cloudflare Access (and never with a cookie session or passkey). */
+export const accessMode = (c: ConsoleConfig): boolean => c.authMode === "cloudflare_access";
 
 /** Everything the use cases need; api and worker build it with the parts they run. */
 export interface Identity {
@@ -138,22 +166,22 @@ export async function audit(
     details?: Record<string, unknown>;
     /** Where the action was requested from when that is not the actor (CLI login IP); encrypted. */
     originIp?: string | null;
+    /** A deterministic event id: a repeat of the same event is then written once. */
+    eventId?: string;
   },
 ): Promise<void> {
-  const eid = uuidv7();
-  await tx
-    .insertInto("audit_events")
-    .values({
-      id: eid,
-      account_id: a.accountUuid,
-      actor_type: a.actor.type,
-      actor_id: a.actor.id,
-      action: a.action,
-      target_type: a.target?.type ?? null,
-      target_id: a.target?.id ?? null,
-      details: JSON.stringify(a.details ?? {}),
-      ip_enc: a.actor.ip ? id.cipher.encrypt(a.actor.ip, `audit:${eid}:ip`) : null,
-      ...(a.originIp ? { origin_ip_enc: id.cipher.encrypt(a.originIp, `audit:${eid}:origin_ip`) } : {}),
-    })
-    .execute();
+  const eid = a.eventId ?? uuidv7();
+  const q = tx.insertInto("audit_events").values({
+    id: eid,
+    account_id: a.accountUuid,
+    actor_type: a.actor.type,
+    actor_id: a.actor.id,
+    action: a.action,
+    target_type: a.target?.type ?? null,
+    target_id: a.target?.id ?? null,
+    details: JSON.stringify(a.details ?? {}),
+    ip_enc: a.actor.ip ? id.cipher.encrypt(a.actor.ip, `audit:${eid}:ip`) : null,
+    ...(a.originIp ? { origin_ip_enc: id.cipher.encrypt(a.originIp, `audit:${eid}:origin_ip`) } : {}),
+  });
+  await (a.eventId ? q.onConflict((oc) => oc.column("id").doNothing()) : q).execute();
 }

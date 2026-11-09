@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { describe, expect, it } from "vitest";
 import { authenticateClient, kidOf, loadServiceClients, loadSigner } from "../../src/app/tokens.js";
-import { checkCooloff } from "../../src/config.js";
+import { cooloffNotice } from "../../src/config.js";
 import { isDevEnv } from "../../src/domain/env.js";
 import { turnstile } from "../../src/infra/clients/turnstile.js";
 
@@ -111,11 +111,11 @@ describe("turnstile", () => {
 });
 
 describe("configuration", () => {
-  it("a zero cool-off is allowed only locally", () => {
-    expect(() => checkCooloff({ env: "local", cooloffSeconds: 0 })).not.toThrow();
-    expect(() => checkCooloff({ env: "server", cooloffSeconds: 0 })).toThrow(/NP_ENV=local/);
-    expect(() => checkCooloff({ env: "server", cooloffSeconds: 86_400 })).not.toThrow();
-    expect(() => checkCooloff({ env: "staging", cooloffSeconds: 0 })).toThrow(/NP_ENV=local/);
+  it("a zero cool-off is allowed on every stage, with a boot notice (owner decision 2026-11-09)", () => {
+    expect(cooloffNotice({ env: "server", cooloffSeconds: 0 })).toMatch(/NP_COOLOFF_SECONDS=0: .*as soon as/);
+    expect(cooloffNotice({ env: "local", cooloffSeconds: 0 })).toMatch(/NP_COOLOFF_SECONDS=0/);
+    expect(cooloffNotice({ env: "server", cooloffSeconds: 600 })).toMatch(/600 s after attestation/);
+    expect(cooloffNotice({ env: "server", cooloffSeconds: 86_400 })).toBeNull();
     expect(isDevEnv("test") && isDevEnv("local") && !isDevEnv("server") && !isDevEnv("staging")).toBe(true);
   });
 });
