@@ -3,6 +3,7 @@
  * and the internal routes (authz, JWKS, service tokens, context); `worker` runs the consumers, the
  * job worker (activations, purges), the recurring-job scheduler and the outbox relay.
  */
+
 import { hostname } from "node:os";
 import { connect, type NatsConnection } from "@nats-io/transport-node";
 import type { KeySource } from "@nearpay-internal/auth";
@@ -38,6 +39,7 @@ import { SettingsService } from "@simplewebauthn/server";
 import { identityRoutes } from "../api/routes.js";
 import { type ApiConfig, consoleConfig, type WorkerConfig } from "../config.js";
 import { CACHE_PURGE_SUBJECT, deadLetters, identityHandlers } from "../consumers/handlers.js";
+import { clientIpRule } from "../domain/client-ip.js";
 import { type AuthzCache, createAuthzCache } from "../infra/cache.js";
 import { chainLookups } from "../infra/clients/chain-rpc.js";
 import { httpPeers, type Peers } from "../infra/clients/peers.js";
@@ -90,6 +92,7 @@ function base(
 ): Mutable<Identity> {
   return {
     env: config.env,
+    clientIp: clientIpRule(config.env, { header: config.clientIpHeader, trustedProxies: config.trustedProxies }),
     db: database.db,
     cipher: createEnvelopeCipher(parseKek(config.piiKek)),
     log: undefined as unknown as Identity["log"],

@@ -1,9 +1,11 @@
 /** Dependencies shared by identity use cases. */
+
 import type { EnvelopeCipher, Kysely, Transaction } from "@nearpay-internal/db";
 import { emit, sql } from "@nearpay-internal/db";
 import { uuidv7 } from "@nearpay-internal/ids";
 import type { Logger, ServiceMetrics } from "@nearpay-internal/service";
 import type { Subject } from "@nearpay-internal/spec";
+import type { ClientIpRule } from "../domain/client-ip.js";
 import type { AuthzCache } from "../infra/cache.js";
 import type { Peers } from "../infra/clients/peers.js";
 import type { TurnstileVerifier } from "../infra/clients/turnstile.js";
@@ -72,6 +74,8 @@ export const NO_CONSOLE: ConsoleConfig = { origin: null, rpId: null, aaguids: ne
 /** Everything the use cases need; api and worker build it with the parts they run. */
 export interface Identity {
   readonly env: string;
+  /** Where the client IP comes from (NP_CLIENT_IP_HEADER, NP_TRUSTED_PROXIES); default: by NP_ENV. */
+  readonly clientIp?: ClientIpRule;
   readonly db: Kysely<DB>;
   readonly cipher: EnvelopeCipher;
   readonly log: Logger;
