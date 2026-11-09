@@ -110,8 +110,12 @@
     }
   ],
   "destination_types": {
-    "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": ["chain_address"],
-    "bip122:000000000019d6689c085ae165831e93": ["chain_address"],
+    "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": [
+      "chain_address"
+    ],
+    "bip122:000000000019d6689c085ae165831e93": [
+      "chain_address"
+    ],
     "note": "intents_account destinations are on near:mainnet only; neither chain uses a memo (memo_mode none)."
   },
   "addresses": {
@@ -429,8 +433,22 @@
             "blockTime": 1794139200,
             "meta": {
               "err": null,
-              "preBalances": [5000000000, 2039280, 2039280, 1000000000, 1461600, 1],
-              "postBalances": [4999995000, 2039280, 2039280, 1000000000, 1461600, 1],
+              "preBalances": [
+                5000000000,
+                2039280,
+                2039280,
+                1000000000,
+                1461600,
+                1
+              ],
+              "postBalances": [
+                4999995000,
+                2039280,
+                2039280,
+                1000000000,
+                1461600,
+                1
+              ],
               "preTokenBalances": [
                 {
                   "accountIndex": 1,
@@ -513,7 +531,9 @@
               "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
               "token_program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
               "owner": "H314ws4NAZj5cXEzLVXyLZ3vrwWYuhDEz2cSa5EMs7DR",
-              "token_accounts": ["6Pae6bB84WciurjFB1rXDJtUUW2Haiv97KvRWAbuRx5h"],
+              "token_accounts": [
+                "6Pae6bB84WciurjFB1rXDJtUUW2Haiv97KvRWAbuRx5h"
+              ],
               "pre_amount": "10000000",
               "post_amount": "35000000"
             },
@@ -527,8 +547,22 @@
             "blockTime": 1794139200,
             "meta": {
               "err": null,
-              "preBalances": [5000000000, 2039280, 0, 1000000000, 1461600, 1],
-              "postBalances": [4997955720, 2039280, 2039280, 1000000000, 1461600, 1],
+              "preBalances": [
+                5000000000,
+                2039280,
+                0,
+                1000000000,
+                1461600,
+                1
+              ],
+              "postBalances": [
+                4997955720,
+                2039280,
+                2039280,
+                1000000000,
+                1461600,
+                1
+              ],
               "preTokenBalances": [
                 {
                   "accountIndex": 1,
@@ -601,7 +635,9 @@
               "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
               "token_program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
               "owner": "H314ws4NAZj5cXEzLVXyLZ3vrwWYuhDEz2cSa5EMs7DR",
-              "token_accounts": ["6Pae6bB84WciurjFB1rXDJtUUW2Haiv97KvRWAbuRx5h"],
+              "token_accounts": [
+                "6Pae6bB84WciurjFB1rXDJtUUW2Haiv97KvRWAbuRx5h"
+              ],
               "pre_amount": "0",
               "post_amount": "25000000"
             },
@@ -616,8 +652,16 @@
             "blockTime": 1794139200,
             "meta": {
               "err": null,
-              "preBalances": [9000000000, 250000000, 1],
-              "postBalances": [7499995000, 1750000000, 1],
+              "preBalances": [
+                9000000000,
+                250000000,
+                1
+              ],
+              "postBalances": [
+                7499995000,
+                1750000000,
+                1
+              ],
               "preTokenBalances": [],
               "postTokenBalances": []
             },
@@ -676,8 +720,22 @@
                   }
                 ]
               },
-              "preBalances": [5000000000, 2039280, 2039280, 1000000000, 1461600, 1],
-              "postBalances": [4999995000, 2039280, 2039280, 1000000000, 1461600, 1],
+              "preBalances": [
+                5000000000,
+                2039280,
+                2039280,
+                1000000000,
+                1461600,
+                1
+              ],
+              "postBalances": [
+                4999995000,
+                2039280,
+                2039280,
+                1000000000,
+                1461600,
+                1
+              ],
               "preTokenBalances": [
                 {
                   "accountIndex": 1,
@@ -724,7 +782,9 @@
               ]
             },
             "transaction": {
-              "signatures": ["CBvfjyxUZpPMXb6Dk61teK8DYdo1U4LNqG5hhmjnivhN2hSSEN7ZHQwjC1bkdwK1HGFSzPoZNw8EFJgoDRJ7kTM"],
+              "signatures": [
+                "CBvfjyxUZpPMXb6Dk61teK8DYdo1U4LNqG5hhmjnivhN2hSSEN7ZHQwjC1bkdwK1HGFSzPoZNw8EFJgoDRJ7kTM"
+              ],
               "message": {
                 "accountKeys": [
                   "bHc9jeXo4NK4ma1W4aLwU5REmqhzTKnzXq79JEeb3Dq",
