@@ -60,8 +60,8 @@ describe("routes and events", () => {
     }
   });
 
-  it("is built against spec 0.3.0; Stage 1 routes keep their shape", () => {
-    expect(SPEC_VERSION).toBe("0.3.0");
+  it("is built against spec 0.3.1; Stage 1 routes keep their shape", () => {
+    expect(SPEC_VERSION).toBe("0.3.1");
     const bound = identityRoutes({} as never, { touches: {} as never, serviceClients: new Map() }).map(
       (b) => b.route.id,
     );

@@ -76,7 +76,7 @@ describe("device authorization", () => {
     expect(stored).toMatchObject({ status: "pending", user_code, device_name: "adarsh-mbp", country: "DE" });
     expect(stored.ip_enc?.toString("latin1")).not.toContain(LOGIN_IP);
     const raw = await sql<{ n: number }>`select count(*)::int as n from cli_logins
-      where convert_from(device_code_sha256, 'LATIN1') like ${`%${device_code.slice(5, 20)}%`}`.execute(s.admin.db);
+      where position(convert_to(${device_code.slice(5, 20)}, 'UTF8') in device_code_sha256) > 0`.execute(s.admin.db);
     expect(raw.rows[0]?.n).toBe(0);
 
     expect((await poll(device_code)).body).toMatchObject({ object: "cli_login_poll", status: "pending", interval: 5 });
