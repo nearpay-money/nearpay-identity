@@ -3,6 +3,8 @@
  * checked case by case against spec 0.4.0 `test-vectors/destination-attestation.json` and the address
  * rules of `chains-solana-bitcoin.json`.
  */
+
+import { BITCOIN_MAINNET, DESTINATION_SIGNING_STANDARDS, SOLANA_MAINNET } from "@nearpay/spec";
 import { getChain, validateAddress } from "@nearpay-internal/chains";
 import { base64 } from "@scure/base";
 import * as btc from "@scure/btc-signer";
@@ -19,7 +21,6 @@ import {
 import { type OwnershipLookups, verifyAttestation } from "../../src/infra/crypto/attestation.js";
 import { bip322MessageHash, bip322VirtualTxs, verifyBip322Simple } from "../../src/infra/crypto/bip322.js";
 import { solanaSigningKey, verifySolanaSignature } from "../../src/infra/crypto/solana.js";
-import { BITCOIN_MAINNET, SOLANA_MAINNET } from "../../src/spec-0.4.0-placeholder.js";
 import { bip322Signer, solanaSigner } from "../support/signers.js";
 import { specVector } from "../support/vectors.js";
 
@@ -365,6 +366,6 @@ describe("destination address rules — chains-solana-bitcoin.json", () => {
         "bc1q9vza2e8x573nczrlzms0wvx3gsqjx7vavgkx0l",
       ),
     ).toBe("bip322");
-    expect([...VERIFIABLE_STANDARDS].sort()).toEqual(["bip322", "eip191", "nep413", "solana"]);
+    expect([...VERIFIABLE_STANDARDS].sort()).toEqual([...DESTINATION_SIGNING_STANDARDS].sort());
   });
 });

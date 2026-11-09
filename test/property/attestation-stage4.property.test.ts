@@ -3,6 +3,8 @@
  * key and one challenge message (account, mode, asset, network, address, nonce, expiry), and nothing a
  * client can send makes a verifier throw or accept something else.
  */
+
+import { BITCOIN_MAINNET, SOLANA_MAINNET } from "@nearpay/spec";
 import { base64 } from "@scure/base";
 import bs58 from "bs58";
 import fc from "fast-check";
@@ -14,7 +16,6 @@ import {
 } from "../../src/domain/settlement-destination/destination.js";
 import { verifyBip322Simple } from "../../src/infra/crypto/bip322.js";
 import { verifySolanaSignature } from "../../src/infra/crypto/solana.js";
-import { BITCOIN_MAINNET, SOLANA_MAINNET } from "../../src/spec-0.4.0-placeholder.js";
 import { bip322Signer, solanaSigner } from "../support/signers.js";
 
 const RUNS = { numRuns: 60 };

@@ -2,18 +2,14 @@
  * Stage 4 settlement destinations on Solana and Bitcoin end to end (lld/identity.md §20) with the worker:
  * live creation and challenge, `standard: solana` / `standard: bip322` attestation → cooling_off → active,
  * P2WPKH/P2TR-only Bitcoin destinations, off-curve Solana addresses, the stored attestation.
- *
- * PLACEHOLDER (Phase B): spec 0.3.1's `attestSettlementDestination` body only admits `nep413 | eip191`, so
- * the attestation step calls the use case directly (`attestDestination`, same code the route runs). With
- * spec 0.4.0 `attestHttp` replaces `attestUseCase`.
+ * Attestations go through the gateway and the spec 0.4.0 `attestSettlementDestination` route.
  */
+
+import { BITCOIN_MAINNET, type DESTINATION_SIGNING_STANDARDS, SOLANA_MAINNET } from "@nearpay/spec";
 import { sql } from "@nearpay-internal/db";
 import { toUuid } from "@nearpay-internal/ids";
-import { ApiError } from "@nearpay-internal/service";
 import { getInternalAsset } from "@nearpay-internal/spec";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { attestDestination } from "../../src/app/destinations.js";
-import { type AttestStandard, BITCOIN_MAINNET, SOLANA_MAINNET } from "../../src/spec-0.4.0-placeholder.js";
 import { bip322Signer, solanaSigner } from "../support/signers.js";
 import { eventually, type Stack, startStack } from "../support/stack.js";
 import { as, signUp, type User } from "../support/users.js";
@@ -55,19 +51,13 @@ const create = (body: Record<string, unknown>, mode: "test" | "live" = "live") =
   s.gateway("POST", "/v1/settlement_destinations", as(u, mode, { label: "Chain", type: "chain_address", ...body }));
 const status = async (id: string) =>
   (await s.gateway("GET", `/v1/settlement_destinations/${id}`, { cookie: u.cookie, mode: "live" })).body;
-const actor = () => ({ type: "user" as const, id: u.userId, ip: null });
 
-/** The attest use case (what the route runs); answers like the gateway would. */
-async function attestUseCase(
+/** `POST /v1/settlement_destinations/{id}/attest` (live) through the gateway. */
+async function attestHttp(
   id: string,
-  body: { challenge_id: string; standard: AttestStandard; signature: string },
+  body: { challenge_id: string; standard: (typeof DESTINATION_SIGNING_STANDARDS)[number]; signature: string },
 ): Promise<{ status: number; body: Record<string, unknown> & { error?: { code: string; message: string } } }> {
-  try {
-    return { status: 200, body: { ...(await attestDestination(s.identity, u.accountId, true, id, body, actor())) } };
-  } catch (e) {
-    if (e instanceof ApiError) return { status: e.status, body: { error: { code: e.code, message: e.message } } };
-    throw e;
-  }
+  return s.gateway("POST", `/v1/settlement_destinations/${id}/attest`, as(u, "live", body));
 }
 
 describe("Solana (standard: solana)", () => {
@@ -88,10 +78,10 @@ describe("Solana (standard: solana)", () => {
       { standard: "solana" as const, signature: Buffer.from(w.sign(c.message)).toString("base64") },
       { standard: "bip322" as const, signature: w.sign(c.message) },
     ]) {
-      const res = await attestUseCase(r.body.id, { challenge_id: c.id, ...bad });
+      const res = await attestHttp(r.body.id, { challenge_id: c.id, ...bad });
       expect(res.body, bad.signature).toMatchObject({ error: { code: "attestation_invalid" } });
     }
-    const ok = await attestUseCase(r.body.id, { challenge_id: c.id, standard: "solana", signature: w.sign(c.message) });
+    const ok = await attestHttp(r.body.id, { challenge_id: c.id, standard: "solana", signature: w.sign(c.message) });
     expect(ok.status).toBe(200);
     expect(ok.body).toMatchObject({ status: "cooling_off" });
     await eventually(async () => (await status(r.body.id)).status === "active");
@@ -102,7 +92,7 @@ describe("Solana (standard: solana)", () => {
       .executeTakeFirstOrThrow();
     expect(row.attestation).toMatchObject({ standard: "solana", method: "solana_ed25519", public_key: null });
     // single use
-    const replay = await attestUseCase(r.body.id, {
+    const replay = await attestHttp(r.body.id, {
       challenge_id: c.id,
       standard: "solana",
       signature: w.sign(c.message),
@@ -115,7 +105,7 @@ describe("Solana (standard: solana)", () => {
     const r = await create({ asset_id: SOL, chain: SOLANA_MAINNET, address: pda });
     expect(r.status).toBe(201);
     const c = r.body.attestation_challenge;
-    const res = await attestUseCase(r.body.id, {
+    const res = await attestHttp(r.body.id, {
       challenge_id: c.id,
       standard: "solana",
       signature: solanaSigner().sign(c.message),
@@ -142,13 +132,13 @@ describe("Bitcoin (standard: bip322)", () => {
       expect(r.status).toBe(201);
       const c = r.body.attestation_challenge;
       expect(c).toMatchObject({ signing_standard: "bip322", nonce: null, recipient: null });
-      const other = await attestUseCase(r.body.id, {
+      const other = await attestHttp(r.body.id, {
         challenge_id: c.id,
         standard: "bip322",
         signature: bip322Signer(type).sign(c.message),
       });
       expect(other.body).toMatchObject({ error: { code: "attestation_invalid" } });
-      const ok = await attestUseCase(r.body.id, {
+      const ok = await attestHttp(r.body.id, {
         challenge_id: c.id,
         standard: "bip322",
         signature: k.sign(c.message),
@@ -176,7 +166,7 @@ describe("Bitcoin (standard: bip322)", () => {
       .where("id", "=", toUuid(r.body.id, "sd"))
       .executeTakeFirstOrThrow();
     expect(row.address_norm).toBe(k.address);
-    const ok = await attestUseCase(r.body.id, { challenge_id: c.id, standard: "bip322", signature: k.sign(c.message) });
+    const ok = await attestHttp(r.body.id, { challenge_id: c.id, standard: "bip322", signature: k.sign(c.message) });
     expect(ok.body).toMatchObject({ status: "cooling_off" });
   });
 

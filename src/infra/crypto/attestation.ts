@@ -14,13 +14,13 @@
  * accounts and ERC-1271 only — Solana and Bitcoin need no RPC, so they are never "unavailable").
  */
 
+import type { DESTINATION_SIGNING_STANDARDS } from "@nearpay/spec";
 import { erc191Hash, nep413Hash } from "@nearpay-internal/intents";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import bs58 from "bs58";
 import { NEP413_RECIPIENT } from "../../domain/settlement-destination/destination.js";
-import type { AttestStandard } from "../../spec-0.4.0-placeholder.js";
 import { verifyBip322Simple } from "./bip322.js";
 import { verifySolanaSignature } from "./solana.js";
 
@@ -118,7 +118,7 @@ export function recoverEip191(message: string, signature: string): string | null
 }
 
 export interface AttestInput {
-  readonly standard: AttestStandard;
+  readonly standard: (typeof DESTINATION_SIGNING_STANDARDS)[number];
   readonly chain: string;
   readonly addressNorm: string;
   readonly message: string;

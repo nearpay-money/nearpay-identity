@@ -9,6 +9,7 @@
  * API keys never can.
  */
 import { randomBytes } from "node:crypto";
+import type { DESTINATION_SIGNING_STANDARDS } from "@nearpay/spec";
 import { getChain, validateAddress } from "@nearpay-internal/chains";
 import { enqueueJob, sql, withTx } from "@nearpay-internal/db";
 import { HttpError } from "@nearpay-internal/http";
@@ -41,7 +42,6 @@ import {
 } from "../domain/settlement-destination/destination.js";
 import { AttestationUnavailable, verifyAttestation } from "../infra/crypto/attestation.js";
 import type { DestinationStatus } from "../infra/db/schema.js";
-import type { AttestStandard } from "../spec-0.4.0-placeholder.js";
 import { refreshLiveEnabled } from "./accounts.js";
 import { type Actor, audit, dbNow, emitEvent, type Identity, type Tx } from "./context.js";
 import {
@@ -623,7 +623,13 @@ export async function attestDestination(
   accountId: string,
   livemode: boolean,
   destinationId: string,
-  b: { challenge_id: string; standard: AttestStandard; signature: string; public_key?: string | undefined },
+  b: {
+    challenge_id: string;
+    /** spec 0.4.0 `attestSettlementDestination.body.standard`: nep413 | eip191 | solana | bip322 */
+    standard: (typeof DESTINATION_SIGNING_STANDARDS)[number];
+    signature: string;
+    public_key?: string | undefined;
+  },
   actor: Actor,
 ) {
   const d0 = await loadOwn(id.db, accountId, livemode, destinationId);
