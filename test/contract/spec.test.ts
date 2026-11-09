@@ -7,6 +7,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   approveCliLogin,
+  attestSettlementDestination,
   CLI_KEY_SCOPES,
   CLI_KEY_TTL_SECONDS,
   CLI_LOGIN_POLL_INTERVAL_SECONDS,
@@ -15,6 +16,7 @@ import {
   createCliLogin,
   createSettlementDestination,
   DashboardSession,
+  DESTINATION_SIGNING_STANDARDS,
   denyCliLogin,
   ERRORS,
   getCliLogin,
@@ -37,12 +39,24 @@ import { type Stack, startStack } from "../support/stack.js";
 
 const ALL = [...PUBLIC_ROUTES, ...INTERNAL_ROUTES];
 
+describe("spec 0.4.0 destination attestations (lld/identity.md §20)", () => {
+  it("the attest body admits all four standards identity verifies, and nothing else", () => {
+    const body = { challenge_id: "chl_01jc6q0f7rm9t3ga4x2b8n5k1d", signature: "A".repeat(88) };
+    const schema = attestSettlementDestination.body;
+    if (!schema) throw new Error("attestSettlementDestination has no body");
+    expect([...DESTINATION_SIGNING_STANDARDS]).toEqual(["nep413", "eip191", "solana", "bip322"]);
+    for (const standard of DESTINATION_SIGNING_STANDARDS)
+      expect(schema.safeParse({ ...body, standard }).success, standard).toBe(true);
+    expect(schema.safeParse({ ...body, standard: "bip137" }).success).toBe(false);
+  });
+});
+
 describe("routes and events", () => {
-  it("binds every Stage-1…3 identity route (incl. console and CLI login routes), and nothing else", () => {
+  it("binds every Stage-1…4 identity route (incl. console and CLI login routes), and nothing else", () => {
     const bindings = identityRoutes({} as never, { touches: {} as never, serviceClients: new Map() });
     expect(unimplementedRoutes("identity", ALL, bindings).map((r) => r.id)).toEqual([]);
     expect(bindings.map((b) => b.route.id).sort()).toEqual(
-      ALL.filter((r) => r.service === "identity" && r.stage <= 3)
+      ALL.filter((r) => r.service === "identity" && r.stage <= 4)
         .map((r) => r.id)
         .sort(),
     );
@@ -60,8 +74,8 @@ describe("routes and events", () => {
     }
   });
 
-  it("is built against spec 0.3.0; Stage 1 routes keep their shape", () => {
-    expect(SPEC_VERSION).toBe("0.3.0");
+  it("is built against spec 0.4.0; Stage 1 routes keep their shape", () => {
+    expect(SPEC_VERSION).toBe("0.4.0");
     const bound = identityRoutes({} as never, { touches: {} as never, serviceClients: new Map() }).map(
       (b) => b.route.id,
     );
@@ -257,6 +271,14 @@ describe("sentinel registry view", () => {
       where table_name = 'audit_events' and column_name = 'origin_ip_enc'`.execute(s.admin.db);
     expect(audit.rows).toHaveLength(1);
   });
+  it("migration 0008: live Bitcoin destinations are P2WPKH / P2TR only (check constraint)", async () => {
+    const c = await sql<{ convalidated: boolean }>`
+      select convalidated from pg_constraint where conname = 'settlement_destinations_bitcoin_live_type'`.execute(
+      s.admin.db,
+    );
+    expect(c.rows).toEqual([{ convalidated: true }]);
+  });
+
   it("the audit log is append-only even for the app role", async () => {
     await s.admin.db
       .insertInto("audit_events")

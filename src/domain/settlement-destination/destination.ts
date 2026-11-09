@@ -83,8 +83,9 @@ export function missingRequirements(
 export type SigningStandard = "nep413" | "eip191" | "solana" | "bip322";
 
 /**
- * How a destination proves ownership (lld/identity.md §8.2): NEAR accounts (named or implicit) sign
- * NEP-413; EVM addresses and `0x…` Intents accounts sign EIP-191. Solana and Bitcoin arrive in Stage 4.
+ * How a destination proves ownership (lld/identity.md §8.2, §20): NEAR accounts (named or implicit) sign
+ * NEP-413; EVM addresses and `0x…` Intents accounts sign EIP-191; Solana addresses sign the raw message
+ * bytes (ed25519, `solana`); Bitcoin P2WPKH/P2TR addresses sign BIP-322 "simple" (`bip322`).
  */
 export function signingStandard(
   type: "chain_address" | "intents_account",
@@ -98,8 +99,43 @@ export function signingStandard(
   return "bip322";
 }
 
-/** Standards Stage 1 can verify (the attest route accepts these). */
-export const STAGE1_STANDARDS: readonly SigningStandard[] = ["nep413", "eip191"];
+/**
+ * Standards identity verifies (Stage 4, §20: all four). Stage 1 verified NEP-413 and EIP-191 only and
+ * refused live Solana/Bitcoin destinations; that refusal is lifted.
+ */
+export const VERIFIABLE_STANDARDS: readonly SigningStandard[] = ["nep413", "eip191", "solana", "bip322"];
+
+/** Bitcoin address types (kit `chains` validates the checksum; this reads the type). */
+export type BitcoinAddressType = "p2wpkh" | "p2tr" | "p2wsh" | "p2pkh" | "p2sh" | "other";
+
+/**
+ * Type of a Bitcoin mainnet address already validated by kit `chains` (lld/identity.md §20): `bc1q` +
+ * 20-byte program (42 chars) = P2WPKH, `bc1q` + 32 bytes (62) = P2WSH, `bc1p` + 32 bytes (62) = P2TR,
+ * base58 `1…` = P2PKH, `3…` = P2SH; anything else (other witness versions or program sizes) = `other`.
+ * Case-insensitive (bech32 is single-case; kit refuses mixed case).
+ */
+export function bitcoinAddressType(address: string): BitcoinAddressType {
+  const a = address.toLowerCase();
+  if (a.startsWith("bc1q")) return a.length === 42 ? "p2wpkh" : a.length === 62 ? "p2wsh" : "other";
+  if (a.startsWith("bc1p")) return a.length === 62 ? "p2tr" : "other";
+  if (a.startsWith("bc1")) return "other";
+  if (address.startsWith("1")) return "p2pkh";
+  if (address.startsWith("3")) return "p2sh";
+  return "other";
+}
+
+/**
+ * Bitcoin settlement destinations (§20): P2WPKH and P2TR only, in both modes — BIP-322 "simple" cannot
+ * prove ownership of P2SH/P2WSH (the script is unknown from the address) or legacy P2PKH (needs the
+ * legacy message format).
+ */
+export function bitcoinDestinationAllowed(address: string): boolean {
+  const t = bitcoinAddressType(address);
+  return t === "p2wpkh" || t === "p2tr";
+}
+
+/** The `address_invalid` message for a refused Bitcoin address type (§20). */
+export const BITCOIN_DESTINATION_HINT = "Use a native SegWit (bc1q…) or Taproot (bc1p…) address";
 
 export const CHALLENGE_TTL_MS = 10 * 60_000;
 export const NEP413_RECIPIENT = "nearpay.money";
