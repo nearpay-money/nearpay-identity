@@ -60,24 +60,25 @@ nearpay-identity/
 
 ## Configuration
 
-| Variable                                             | Process      | Meaning                                                                                                                                                     |
-| ---------------------------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NP_DB_URL_FILE`                                     | all          | Database URL (app role; migrator role for `migrate`)                                                                                                        |
-| `NP_PII_KEK_FILE`                                    | all          | 32-byte KEK: IPs, CSRF copies, idempotent responses at rest                                                                                                 |
-| `NP_JWT_KEYS_DIR`                                    | all          | `current.pem` + `next.pem` (Ed25519); both published in the JWKS, `current` signs; missing → exit 1                                                         |
-| `NP_VALKEY_URL`                                      | api, worker  | Key cache and rate limits (down → per-pod limits at half rate)                                                                                              |
-| `NP_NATS_URL`                                        | api, worker  | Worker: events; api (optional): cross-replica cache purge                                                                                                   |
-| `NP_SERVICE_CLIENTS_FILE`                            | api          | `{"clients":[{"client_id","secret_sha256"}]}`; scopes from the spec                                                                                         |
-| `NP_TURNSTILE_SECRET_FILE`                           | api          | Cloudflare secret; Cloudflare's test secrets are answered locally outside the server stage                                                                  |
-| `NP_WEBAUTHN_RP_ID`, `NP_WEBAUTHN_ORIGINS`           | api          | Relying party (`nearpay.localhost` locally) and allowed origins                                                                                             |
-| `NP_DASHBOARD_ORIGIN`                                | api          | Magic links: `<origin>/auth/verify#token=…` (fragment: never in a server log)                                                                               |
-| `NP_COOLOFF_SECONDS`                                 | api, worker  | Destination cool-off (86 400; 0 only when `NP_ENV=local`)                                                                                                   |
-| `NP_RECOVERY_LOCK_SECONDS`                           | api          | Destination changes after an account recovery (172 800)                                                                                                     |
-| `NP_COMPLIANCE_URL`, `NP_RAILS_URL`, `NP_NOTIFY_URL` | api          | Screening, assets/chain profiles/minimums, magic-link mail                                                                                                  |
-| `NP_NEAR_RPC_URLS`, `NP_EVM_RPC_URLS`                | api          | Attestation lookups: NEAR `view_access_key` pool; `{"<chain id>": [urls]}` for ERC-1271                                                                     |
-| `NP_OPS_ORIGIN`                                      | api, ops CLI | Console origin (`https://ops.…`): operator WebAuthn origin (RP id = its host) and enrolment links; unset → console enrolment refused                        |
-| `NP_OPS_AAGUID_ALLOWLIST_FILE`                       | api          | One AAGUID per line: hardware keys accepted for operators (empty/missing → all refused; virtual-authenticator AAGUIDs only when `NP_ENV` is `local`/`test`) |
-| `NP_OPS_ATTESTATION_ROOTS_FILE`                      | api          | PEM bundle of vendor attestation roots; required on the server stage (without it an AAGUID is only self-asserted)                                           |
+| Variable                                             | Process      | Meaning                                                                                                                                                           |
+| ---------------------------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NP_DB_URL_FILE`                                     | all          | Database URL (app role; migrator role for `migrate`)                                                                                                              |
+| `NP_PII_KEK_FILE`                                    | all          | 32-byte KEK: IPs, CSRF copies, idempotent responses at rest                                                                                                       |
+| `NP_JWT_KEYS_DIR`                                    | all          | `current.pem` + `next.pem` (Ed25519); both published in the JWKS, `current` signs; missing → exit 1                                                               |
+| `NP_VALKEY_URL`                                      | api, worker  | Key cache and rate limits (down → per-pod limits at half rate)                                                                                                    |
+| `NP_NATS_URL`                                        | api, worker  | Worker: events; api (optional): cross-replica cache purge                                                                                                         |
+| `NP_SERVICE_CLIENTS_FILE`                            | api          | `{"clients":[{"client_id","secret_sha256"}]}`; scopes from the spec                                                                                               |
+| `NP_TURNSTILE_SECRET_FILE`                           | api          | Cloudflare secret; Cloudflare's test secrets are answered locally on local/test and refused at boot on the server stage                                           |
+| `NP_WEBAUTHN_RP_ID`, `NP_WEBAUTHN_ORIGINS`           | api          | Relying party (`nearpay.localhost` locally) and allowed origins; server stage: public https origins under the RP id, the dashboard among them                     |
+| `NP_CLIENT_IP_HEADER`, `NP_TRUSTED_PROXIES`          | api          | Client IP source (`cf-connecting-ip` default on the server stage, `x-forwarded-for` locally) and the proxy CIDRs whose headers count (default loopback + private) |
+| `NP_DASHBOARD_ORIGIN`                                | api          | Magic links: `<origin>/auth/verify#token=…` (fragment: never in a server log)                                                                                     |
+| `NP_COOLOFF_SECONDS`                                 | api, worker  | Destination cool-off (86 400; 0 only when `NP_ENV=local`)                                                                                                         |
+| `NP_RECOVERY_LOCK_SECONDS`                           | api          | Destination changes after an account recovery (172 800)                                                                                                           |
+| `NP_COMPLIANCE_URL`, `NP_RAILS_URL`, `NP_NOTIFY_URL` | api          | Screening, assets/chain profiles/minimums, magic-link mail                                                                                                        |
+| `NP_NEAR_RPC_URLS`, `NP_EVM_RPC_URLS`                | api          | Attestation lookups: NEAR `view_access_key` pool; `{"<chain id>": [urls]}` for ERC-1271                                                                           |
+| `NP_OPS_ORIGIN`                                      | api, ops CLI | Console origin (`https://ops.…`): operator WebAuthn origin (RP id = its host) and enrolment links; unset → console enrolment refused                              |
+| `NP_OPS_AAGUID_ALLOWLIST_FILE`                       | api          | One AAGUID per line: hardware keys accepted for operators (empty/missing → all refused; virtual-authenticator AAGUIDs only when `NP_ENV` is `local`/`test`)       |
+| `NP_OPS_ATTESTATION_ROOTS_FILE`                      | api          | PEM bundle of vendor attestation roots; required on the server stage (without it an AAGUID is only self-asserted)                                                 |
 
 ## Behaviour
 

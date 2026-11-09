@@ -3,7 +3,7 @@
  * public route table, credential precedence, CSRF, rate-limit classes, token buckets, client IP.
  */
 
-import { isDevEnv } from "../env.js";
+import { type ClientIpRule, clientIpRule, resolveClientIp } from "../client-ip.js";
 
 export interface RouteRef {
   readonly id: string;
@@ -90,16 +90,15 @@ export function takeToken(
 
 /**
  * Client IP (L-ID-07): `CF-Connecting-IP` on the server stage (Cloudflare-only origin, and any NP_ENV
- * other than local/test); locally the first `X-Forwarded-For` hop set by Traefik. Never trust either
- * outside its stage.
+ * other than local/test); locally the rightmost untrusted `X-Forwarded-For` hop (Traefik appends the peer).
+ * Headers count only when the TCP peer is a trusted proxy (`NP_TRUSTED_PROXIES`); see domain/client-ip.ts.
  */
 export function clientIp(
   env: string,
-  h: { cfConnectingIp?: string | undefined; xForwardedFor?: string | undefined },
+  h: { cfConnectingIp?: string | undefined; xForwardedFor?: string | undefined; peer?: string | undefined },
+  rule: ClientIpRule = clientIpRule(env),
 ): string | null {
-  const v = isDevEnv(env) ? h.xForwardedFor?.split(",")[0] : h.cfConnectingIp;
-  const ip = v?.trim();
-  return ip && /^[0-9a-fA-F:.]{2,45}$/.test(ip) ? ip : null;
+  return resolveClientIp(rule, h);
 }
 
 /** `NearPay-Mode` header → livemode for session principals (default test). */

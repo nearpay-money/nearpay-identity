@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { baseConfigShape, list, loadConfig, secret, url } from "@nearpay-internal/service";
 import { z } from "zod";
 import type { ConsoleConfig } from "./app/context.js";
+import { CLIENT_IP_HEADERS, clientIpRule } from "./domain/client-ip.js";
 import { isDevEnv } from "./domain/env.js";
 
 const shared = {
@@ -13,6 +14,10 @@ const shared = {
   /** Directory with `current.pem` and `next.pem` (Ed25519) — internal JWT signing keys. */
   jwtKeysDir: z.string().min(1).default("/run/secrets/jwt"),
   complianceUrl: url(["http:", "https:"]),
+  /** Client IP source behind the gateway (default: cf-connecting-ip on the server stage, x-forwarded-for locally). */
+  clientIpHeader: z.enum(CLIENT_IP_HEADERS).optional(),
+  /** CIDRs of the proxies in front of identity whose forwarding headers count (default: loopback + private ranges). */
+  trustedProxies: list(z.string().min(1)).optional(),
   /** 86 400 s; 0 is allowed only when NP_ENV=local (checked in readConfig). */
   cooloffSeconds: z.coerce
     .number()
@@ -133,9 +138,48 @@ export function consoleConfig(c: {
   };
 }
 
+/** Cloudflare's documented Turnstile test secrets (always pass / fail / spent): local and test stacks only. */
+export const isTurnstileTestSecret = (s: string) => /^[123]x0+AA$/.test(s.trim());
+
+function publicOrigin(name: string, value: string): URL {
+  const u = new URL(value);
+  if (u.protocol !== "https:" || u.hostname === "localhost" || u.hostname.endsWith(".localhost"))
+    throw new Error(`${name} must be a public https origin on the server stage (got ${value})`);
+  return u;
+}
+
+/**
+ * Server-stage rules (every NP_ENV but local/test): a real Turnstile secret (a test secret passes every
+ * token, even through siteverify), and WebAuthn origins that are public https origins under the RP id
+ * (`nearpay.money` → `dashboard.nearpay.money`), the dashboard among them; the console origin likewise.
+ */
+export function checkServerConfig(
+  c: Pick<ApiConfig, "env" | "turnstileSecret" | "webauthnRpId" | "webauthnOrigins" | "dashboardOrigin" | "opsOrigin">,
+): void {
+  if (isDevEnv(c.env)) return;
+  if (isTurnstileTestSecret(c.turnstileSecret))
+    throw new Error(
+      "NP_TURNSTILE_SECRET_FILE holds a Cloudflare test secret: allowed only when NP_ENV is local or test",
+    );
+  const rp = c.webauthnRpId.toLowerCase();
+  if (rp === "localhost" || rp.endsWith(".localhost") || !rp.includes("."))
+    throw new Error(`NP_WEBAUTHN_RP_ID must be the public domain on the server stage (got ${c.webauthnRpId})`);
+  for (const o of c.webauthnOrigins) {
+    const h = publicOrigin("NP_WEBAUTHN_ORIGINS", o).hostname.toLowerCase();
+    if (h !== rp && !h.endsWith(`.${rp}`))
+      throw new Error(`NP_WEBAUTHN_ORIGINS: ${o} is not under the RP id ${c.webauthnRpId}`);
+  }
+  const dashboard = publicOrigin("NP_DASHBOARD_ORIGIN", c.dashboardOrigin).origin;
+  if (!c.webauthnOrigins.some((o) => new URL(o).origin === dashboard))
+    throw new Error("NP_WEBAUTHN_ORIGINS must include NP_DASHBOARD_ORIGIN");
+  if (c.opsOrigin) publicOrigin("NP_OPS_ORIGIN", c.opsOrigin);
+}
+
 export const readApiConfig = () => {
   const c = loadConfig(apiShape);
   checkCooloff(c);
+  checkServerConfig(c);
+  clientIpRule(c.env, { header: c.clientIpHeader, trustedProxies: c.trustedProxies }); // a bad CIDR fails at boot
   return c;
 };
 export const readWorkerConfig = () => {

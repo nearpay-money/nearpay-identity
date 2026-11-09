@@ -62,6 +62,8 @@ export interface AuthzHeaders {
   mode?: string | undefined;
   requestId?: string | undefined;
   xForwardedFor?: string | undefined;
+  /** TCP peer of identity (the gateway); forwarding headers count only from a trusted proxy. */
+  peer?: string | undefined;
   cfConnectingIp?: string | undefined;
 }
 
@@ -248,7 +250,11 @@ async function decide(id: Identity, h: AuthzHeaders, touch: Touches) {
     );
   const route = consoleHost ? matchOps(method, h.uri ?? "/") : match(method, h.uri ?? "/");
   const requestId = isId("req", h.requestId) ? (h.requestId as string) : newId("req");
-  const ip = clientIp(id.env, { cfConnectingIp: h.cfConnectingIp, xForwardedFor: h.xForwardedFor });
+  const ip = clientIp(
+    id.env,
+    { cfConnectingIp: h.cfConnectingIp, xForwardedFor: h.xForwardedFor, peer: h.peer },
+    id.clientIp,
+  );
   const unsafe = isUnsafe(method);
   let claims: MintedClaims;
   let rateKey: string;

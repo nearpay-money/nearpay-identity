@@ -108,10 +108,15 @@ const header = (ctx: RequestContext, name: string): string | undefined => {
 function meta(id: Identity, ctx: RequestContext): auth.RequestMeta {
   return {
     host: header(ctx, "x-forwarded-host") ?? header(ctx, "host"),
-    ip: clientIp(id.env, {
-      cfConnectingIp: header(ctx, "cf-connecting-ip"),
-      xForwardedFor: header(ctx, "x-forwarded-for"),
-    }),
+    ip: clientIp(
+      id.env,
+      {
+        cfConnectingIp: header(ctx, "cf-connecting-ip"),
+        xForwardedFor: header(ctx, "x-forwarded-for"),
+        peer: ctx.request.socket?.remoteAddress,
+      },
+      id.clientIp,
+    ),
     userAgent: header(ctx, "user-agent"),
     cookie: header(ctx, "cookie"),
   };
@@ -336,6 +341,7 @@ export function identityRoutes(id: Identity, deps: RouteDeps): RouteBinding[] {
           requestId: header(ctx, "x-request-id"),
           xForwardedFor: header(ctx, "x-forwarded-for"),
           cfConnectingIp: header(ctx, "cf-connecting-ip"),
+          peer: ctx.request.socket?.remoteAddress,
         },
         deps.touches,
       );
