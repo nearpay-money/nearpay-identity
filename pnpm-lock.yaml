@@ -66,6 +66,9 @@ importers:
       ioredis:
         specifier: 6.0.0
         version: 6.0.0
+      jose:
+        specifier: 6.2.15
+        version: 6.2.15
       lru-cache:
         specifier: 11.5.3
         version: 11.5.3
@@ -91,9 +94,6 @@ importers:
       fast-check:
         specifier: 4.10.2
         version: 4.10.2
-      jose:
-        specifier: 6.2.15
-        version: 6.2.15
       typescript:
         specifier: 5.9.3
         version: 5.9.3
