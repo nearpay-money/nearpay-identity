@@ -5,7 +5,7 @@
  * |----------------------|--------------------------|-------------------------------------------------------|
  * | destination.activate | at `active_at` (per sd)  | re-screen, activate (or disable on block; retry when screening is down) |
  * | destination.expire   | hourly (+20 min offset)  | disable live destinations still pending 7 days after creation |
- * | purge.auth           | hourly                   | expired magic links, registration tokens, challenges, sessions; marks invitations expired |
+ * | purge.auth           | hourly                   | expired magic links, registration tokens, challenges, Google flows, sessions; marks invitations expired |
  * | kit.purge            | hourly                   | published outbox, old inbox, expired idempotency keys  |
  * | cli_logins.expire    | every minute             | overdue CLI logins → expired; uncollected keys revoked (§6.2) |
  *
@@ -35,6 +35,8 @@ export async function purgeAuth(id: Identity) {
     attestation_challenges: await one(
       sql`delete from attestation_challenges where expires_at < now() - interval '30 days' and used_at is null`,
     ),
+    // Google flows (ADR-0026): 10 minutes, single use; kept a day for diagnosis (hashes only)
+    oauth_flows: await one(sql`delete from oauth_flows where expires_at < now() - interval '1 day'`),
     sessions: await one(sql`delete from sessions where expires_at < now() - interval '30 days'`),
     // CLI logins (§6.2): purged 7 days after creation once settled (approved rows are settled by cli_logins.expire)
     cli_logins: await one(

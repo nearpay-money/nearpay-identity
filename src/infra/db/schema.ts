@@ -1,4 +1,4 @@
-/** Kysely table types (migrations/0001…0007). */
+/** Kysely table types (migrations/0001…0010). */
 import type { ColumnType, Generated, KitTables } from "@nearpay-internal/db";
 
 type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
@@ -81,6 +81,8 @@ export interface UsersTable {
   recovered_at: Generated<Date | null>;
   /** Migration 0006: recoveries so far (`evt.identity.user.recovered` aggregate version). */
   recovery_count: Generated<number>;
+  /** Migration 0010: Google links/unlinks so far (`user_sign_in_methods` aggregate version). */
+  sign_in_methods_version: Generated<number>;
 }
 
 export type Role = "owner" | "admin" | "developer" | "finance" | "support" | "viewer";
@@ -160,6 +162,37 @@ export interface SessionsTable {
   revoked_at: NullableTimestamp;
   ip_enc: Buffer | null;
   user_agent: string | null;
+  /** Migration 0010: how the session was created (ADR-0026). */
+  auth_method: Generated<SessionAuthMethod>;
+}
+
+export type SessionAuthMethod = "passkey" | "google" | "recovery";
+
+/** Migration 0010: external sign-in identities (ADR-0026); keyed on the provider subject. */
+export interface LinkedIdentitiesTable {
+  provider: "google";
+  subject: string;
+  user_id: string;
+  email_at_link: string;
+  created_at: Timestamp;
+}
+
+/** Migration 0010: a started Google flow (10 minutes, single use; hashes and the encrypted PKCE verifier only). */
+export interface OauthFlowsTable {
+  id: string;
+  provider: "google";
+  purpose: "signin" | "link";
+  intent: Generated<"signin" | "signup">;
+  state_hash: Buffer;
+  binding_hash: Buffer;
+  nonce_hash: Buffer;
+  code_verifier_enc: Buffer;
+  next_path: string | null;
+  user_id: string | null;
+  session_id: string | null;
+  created_at: Timestamp;
+  expires_at: Timestamp;
+  used_at: NullableTimestamp;
 }
 
 export type LinkPurpose = "signup" | "recovery" | "invite" | "ops_enrol";
@@ -383,6 +416,8 @@ export interface IdentityTables {
   destination_approvals: DestinationApprovalsTable;
   manager_grants: ManagerGrantsTable;
   cli_logins: CliLoginsTable;
+  linked_identities: LinkedIdentitiesTable;
+  oauth_flows: OauthFlowsTable;
 }
 
 export type DB = IdentityTables & KitTables;

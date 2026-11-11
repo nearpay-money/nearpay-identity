@@ -40,6 +40,7 @@ import { createApi, createWorker } from "../../src/app/services.js";
 import { signerFrom } from "../../src/app/tokens.js";
 import type { ApiConfig, WorkerConfig } from "../../src/config.js";
 import { createAuthzCache } from "../../src/infra/cache.js";
+import type { GoogleOidc } from "../../src/infra/clients/google.js";
 import { httpPeers } from "../../src/infra/clients/peers.js";
 import type { OwnershipLookups } from "../../src/infra/crypto/attestation.js";
 import { MIGRATIONS_DIR } from "../../src/infra/db/migrations.js";
@@ -109,6 +110,8 @@ export interface StackOptions {
   now?: () => number;
   /** Console settings over the test defaults (platform passkeys, Cloudflare Access mode, …). */
   console?: Partial<ConsoleConfig>;
+  /** Continue with Google client (tests: pointed at test/support/google.ts); default off. */
+  google?: GoogleOidc | null;
 }
 
 /** Default mock answers: every asset/chain supported, screening allows, mail accepted. */
@@ -257,6 +260,7 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     evmRpcUrls: {},
     opsAllowPlatformPasskeys: false,
     opsAuthMode: "passkey",
+    googleClientId: "",
   };
   const apiCache = createAuthzCache({ valkeyUrl: valkey.url });
   const { service: api, identity } = createApi(apiConfig, {
@@ -272,6 +276,7 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     peers,
     lookups,
     cache: apiCache,
+    google: o.google ?? null,
     ...(o.now ? { now: o.now } : {}),
   });
   await api.start();

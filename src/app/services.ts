@@ -37,11 +37,12 @@ import { type BackgroundTask, createService, type Service } from "@nearpay-inter
 import { STREAMS, type Subject } from "@nearpay-internal/spec";
 import { SettingsService } from "@simplewebauthn/server";
 import { identityRoutes } from "../api/routes.js";
-import { type ApiConfig, consoleConfig, type WorkerConfig } from "../config.js";
+import { type ApiConfig, consoleConfig, googleSettings, type WorkerConfig } from "../config.js";
 import { CACHE_PURGE_SUBJECT, deadLetters, identityHandlers } from "../consumers/handlers.js";
 import { clientIpRule } from "../domain/client-ip.js";
 import { type AuthzCache, createAuthzCache } from "../infra/cache.js";
 import { chainLookups } from "../infra/clients/chain-rpc.js";
+import { type GoogleOidc, googleOidc } from "../infra/clients/google.js";
 import { httpPeers, type Peers } from "../infra/clients/peers.js";
 import { type TurnstileVerifier, turnstile } from "../infra/clients/turnstile.js";
 import type { OwnershipLookups } from "../infra/crypto/attestation.js";
@@ -49,7 +50,7 @@ import { MIGRATIONS_DIR } from "../infra/db/migrations.js";
 import type { DB } from "../infra/db/schema.js";
 import { jobHandlers, RECURRING } from "../workers/jobs.js";
 import { touches } from "./authz.js";
-import { announceConsole, announceCooloff } from "./boot.js";
+import { announceConsole, announceCooloff, announceGoogle } from "./boot.js";
 import { accessMode, type ConsoleConfig, type Identity, identityMetrics, NO_CONSOLE } from "./context.js";
 import { bootstrapOperator } from "./operators.js";
 import { loadServiceClients, loadSigner, type Signer } from "./tokens.js";
@@ -65,6 +66,8 @@ export interface ServiceDeps {
   keys?: KeySource;
   /** Console sign-in settings; default: from the configuration files. */
   console?: ConsoleConfig;
+  /** Continue with Google (ADR-0026); default: from NP_GOOGLE_CLIENT_ID + the client secret file (null = off). */
+  google?: GoogleOidc | null;
   now?: () => number;
 }
 
@@ -171,6 +174,18 @@ export function createApi(config: ApiConfig, deps: ServiceDeps = {}): { service:
     },
     deps.now ?? Date.now,
   );
+  const g = googleSettings(config);
+  id.google =
+    deps.google !== undefined
+      ? deps.google
+      : g.settings
+        ? googleOidc({
+            clientId: g.settings.clientId,
+            clientSecret: g.settings.clientSecret,
+            redirectUri: g.settings.redirectUri,
+            ...(g.settings.endpoints ? { endpoints: g.settings.endpoints } : {}),
+          })
+        : null;
   // operator-key attestations chain to the configured vendor roots (console.ts checks they exist on the server stage)
   if (id.console.attestationRoots.length)
     for (const identifier of ["packed", "fido-u2f", "tpm"] as const)
@@ -192,6 +207,7 @@ export function createApi(config: ApiConfig, deps: ServiceDeps = {}): { service:
   id.metrics = identityMetrics(service.metrics);
   announceConsole(service.log, service.metrics, id);
   announceCooloff(service.log, service.metrics, config);
+  announceGoogle(service.log, service.metrics, id, g.reason);
   const bootstrapEmail = id.console.bootstrapEmail;
   if (accessMode(id.console) && bootstrapEmail)
     service.addBackground({

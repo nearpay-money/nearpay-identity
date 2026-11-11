@@ -549,7 +549,13 @@ async function reissueFor(id: Identity, tx: Tx, meta: RequestMeta, userUuid: str
     .execute();
   id.cache.purgeSession(s.token_hash.toString("hex"));
   const csrf = id.cipher.decrypt(s.csrf_enc, `session:${s.id}:csrf`).toString("utf8");
-  return sessionBody(tx, userUuid, accountUuid, { token: "", csrf, expiresAt: s.expires_at });
+  return sessionBody(tx, userUuid, accountUuid, {
+    token: "",
+    csrf,
+    expiresAt: s.expires_at,
+    authMethod: s.auth_method,
+    createdAt: s.created_at,
+  });
 }
 
 /** `POST /v1/auth/invitations/accept`: the signed-in user whose email matches joins; the session switches to it. */
