@@ -10,10 +10,10 @@
  * (ops) sessions are issued by console.ts; dashboard ceremonies only ever use dashboard passkeys.
  */
 import { randomBytes } from "node:crypto";
-import { API_VERSION } from "@nearpay/spec";
 import { withTx } from "@nearpay-internal/db";
 import { fromUuid, toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { ApiError, respond } from "@nearpay-internal/service";
+import { API_VERSION } from "@nearpay-money/spec";
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,

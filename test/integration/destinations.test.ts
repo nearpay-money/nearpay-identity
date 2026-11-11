@@ -4,11 +4,11 @@
  * and the compliance consumers.
  */
 import { connect } from "@nats-io/transport-node";
-import { SettlementDestination } from "@nearpay/spec";
 import { sql } from "@nearpay-internal/db";
 import { newId, toUuid } from "@nearpay-internal/ids";
 import { createScreening, listChainProfiles } from "@nearpay-internal/spec";
 import { domainEvent, type EventProbe, mintServiceToken, mockError } from "@nearpay-internal/testing";
+import { SettlementDestination } from "@nearpay-money/spec";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { evmSigner, nearSigner } from "../support/signers.js";
 import { eventually, type Stack, startStack, USDC_BASE, USDC_NEAR } from "../support/stack.js";

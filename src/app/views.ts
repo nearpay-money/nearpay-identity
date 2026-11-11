@@ -1,10 +1,10 @@
-/** Rows → contract objects (`@nearpay/spec` Account, ApiKey, SettlementDestination…). */
+/** Rows → contract objects (`@nearpay-money/spec` Account, ApiKey, SettlementDestination…). */
 import { createHash } from "node:crypto";
-import type { Account, ApiKey as ApiKeySchema, SettlementDestination } from "@nearpay/spec";
 import { destinationFingerprint } from "@nearpay-internal/chains";
 import type { Selectable } from "@nearpay-internal/db";
 import { fromUuid } from "@nearpay-internal/ids";
 import type { InternalSettlementDestination } from "@nearpay-internal/spec";
+import type { Account, ApiKey as ApiKeySchema, SettlementDestination } from "@nearpay-money/spec";
 import { withSettingDefaults } from "../domain/account/account.js";
 import { approvedBy, rejectedBy } from "../domain/approval/approval.js";
 import { usdMicrosToCents } from "../domain/settlement-destination/destination.js";

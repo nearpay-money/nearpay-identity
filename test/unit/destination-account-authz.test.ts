@@ -1,4 +1,4 @@
-import { PUBLIC_ROUTES } from "@nearpay/spec";
+import { PUBLIC_ROUTES } from "@nearpay-money/spec";
 import { describe, expect, it } from "vitest";
 import { applyPatch, DEFAULT_SETTINGS, SettingError, withSettingDefaults } from "../../src/domain/account/account.js";
 import {

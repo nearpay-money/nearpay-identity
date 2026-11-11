@@ -1,5 +1,5 @@
 /** Stage 2 domain rules (lld/identity.md §5, §6, §6.1, §11): approvals, team, console keys, scopes, sessions. */
-import { KEY_SCOPES } from "@nearpay/spec";
+import { KEY_SCOPES } from "@nearpay-money/spec";
 import { describe, expect, it } from "vitest";
 import { consoleConfig, parseAaguids, parsePemBundle } from "../../src/config.js";
 import { checkScopes, expandScopes, restrictedAllows } from "../../src/domain/api-key/key.js";

@@ -1,4 +1,4 @@
-import { CLI_LOGIN_POLL_INTERVAL_SECONDS, CliUserCode } from "@nearpay/spec";
+import { CLI_LOGIN_POLL_INTERVAL_SECONDS, CliUserCode } from "@nearpay-money/spec";
 import { describe, expect, it } from "vitest";
 import {
   type CliLoginState,

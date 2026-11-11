@@ -1,8 +1,9 @@
 /** Gateway authorisation, API keys and the internal routes (lld/identity.md §6, §8.1). */
-import { OPS_ROLE_SCOPES } from "@nearpay/spec";
+
 import { toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { getSettlementContext } from "@nearpay-internal/spec";
 import { mintServiceToken } from "@nearpay-internal/testing";
+import { OPS_ROLE_SCOPES } from "@nearpay-money/spec";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { newSecret, sha256 } from "../../src/domain/session/session.js";

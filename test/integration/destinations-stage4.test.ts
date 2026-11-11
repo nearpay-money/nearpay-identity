@@ -5,10 +5,10 @@
  * Attestations go through the gateway and the spec 0.4.0 `attestSettlementDestination` route.
  */
 
-import { BITCOIN_MAINNET, type DESTINATION_SIGNING_STANDARDS, SOLANA_MAINNET } from "@nearpay/spec";
 import { sql } from "@nearpay-internal/db";
 import { toUuid } from "@nearpay-internal/ids";
 import { getInternalAsset } from "@nearpay-internal/spec";
+import { BITCOIN_MAINNET, type DESTINATION_SIGNING_STANDARDS, SOLANA_MAINNET } from "@nearpay-money/spec";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { bip322Signer, solanaSigner } from "../support/signers.js";
 import { eventually, type Stack, startStack } from "../support/stack.js";

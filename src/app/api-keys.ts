@@ -5,10 +5,11 @@
  * keys (`rk_…`) hold only catalogue scopes (write implies read, expanded at the gateway); a key's
  * name, IP allow-list and (restricted) scopes change with `updateApiKey`, purged the same way.
  */
-import { KEY_SCOPES } from "@nearpay/spec";
+
 import { withTx } from "@nearpay-internal/db";
 import { fromUuid, toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { ApiError } from "@nearpay-internal/service";
+import { KEY_SCOPES } from "@nearpay-money/spec";
 import {
   checkScopes,
   displayPrefix,

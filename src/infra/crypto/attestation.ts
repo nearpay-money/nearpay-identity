@@ -14,8 +14,8 @@
  * accounts and ERC-1271 only — Solana and Bitcoin need no RPC, so they are never "unavailable").
  */
 
-import type { DESTINATION_SIGNING_STANDARDS } from "@nearpay/spec";
 import { erc191Hash, nep413Hash } from "@nearpay-internal/intents";
+import type { DESTINATION_SIGNING_STANDARDS } from "@nearpay-money/spec";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";

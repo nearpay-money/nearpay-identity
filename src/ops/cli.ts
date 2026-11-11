@@ -4,10 +4,10 @@
  * console. Every command prints one JSON document; errors print `{"error": …}` and exit 1 (2: usage).
  */
 import { parseArgs } from "node:util";
-import { API_VERSION } from "@nearpay/spec";
 import { enqueueJob, withTx } from "@nearpay-internal/db";
 import { fromUuid, isId, toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { ApiError } from "@nearpay-internal/service";
+import { API_VERSION } from "@nearpay-money/spec";
 import { createKey, revokeKey } from "../app/api-keys.js";
 import { DEFAULT_FEE_SCHEDULE } from "../app/auth.js";
 import { sendEnrolment } from "../app/console.js";

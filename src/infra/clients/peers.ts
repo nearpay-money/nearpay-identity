@@ -3,7 +3,6 @@
  * it locally: it is the issuer). Compliance screening fails closed; rails minimums degrade to null.
  */
 
-import type { RouteResponse } from "@nearpay/spec";
 import { HttpError, httpClient } from "@nearpay-internal/http";
 import {
   createScreening,
@@ -13,6 +12,7 @@ import {
   listChainProfiles,
   sendMessage,
 } from "@nearpay-internal/spec";
+import type { RouteResponse } from "@nearpay-money/spec";
 
 export type Screening = RouteResponse<typeof createScreening>;
 export type Asset = RouteResponse<typeof getInternalAsset>;

@@ -1,8 +1,9 @@
 /** Sign-up, passkeys, sessions, step-up and logout through the gateway (lld/identity.md §6, §12). */
-import { DashboardSession } from "@nearpay/spec";
+
 import { sql } from "@nearpay-internal/db";
 import { toUuid } from "@nearpay-internal/ids";
 import { sendMessage } from "@nearpay-internal/spec";
+import { DashboardSession } from "@nearpay-money/spec";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ORIGIN, RP_ID, type Stack, startStack } from "../support/stack.js";
 import { as, cookieOf, magicToken, signUp, stepUp, type User } from "../support/users.js";

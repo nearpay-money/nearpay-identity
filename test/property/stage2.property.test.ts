@@ -2,8 +2,9 @@
  * Stage 2 properties (lld/identity.md §15): the two-approver rule, restricted-key scope evaluation,
  * console session expiry and the last-owner rule.
  */
-import { KEY_SCOPES, PUBLIC_ROUTES } from "@nearpay/spec";
+
 import { authorizeRoute } from "@nearpay-internal/auth";
+import { KEY_SCOPES, PUBLIC_ROUTES } from "@nearpay-money/spec";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { checkScopes, expandScopes, restrictedAllows } from "../../src/domain/api-key/key.js";

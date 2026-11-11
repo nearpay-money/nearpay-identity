@@ -1,6 +1,30 @@
 /** Spec route bindings (lld/identity.md §6). Auth, roles and step-up are enforced from the spec by the bootstrap. */
 
-import type { ServiceName } from "@nearpay/spec";
+import type { InternalClaims } from "@nearpay-internal/auth";
+import { toUuid } from "@nearpay-internal/ids";
+import { ApiError, implement, type RequestContext, type RouteBinding, respond } from "@nearpay-internal/service";
+import {
+  authorize as authorizeRoute,
+  getInternalOpsOperator,
+  getInternalSettlementDestination,
+  getJwks,
+  getNotificationRecipients,
+  getOpsMerchant,
+  getOpsSession,
+  getSettlementContext,
+  listOpsAuditEvents,
+  listOpsMerchants,
+  mintServiceToken,
+  opsEnrolmentVerify,
+  opsLogout,
+  opsPasskeyAuthenticationOptions,
+  opsPasskeyAuthenticationVerify,
+  opsPasskeyRegistrationOptions,
+  opsPasskeyRegistrationVerify,
+  opsStepUpOptions,
+  opsStepUpVerify,
+} from "@nearpay-internal/spec";
+import type { ServiceName } from "@nearpay-money/spec";
 import {
   acceptInvitation,
   approveCliLogin,
@@ -46,31 +70,7 @@ import {
   updateApiKey,
   updateMember,
   verifyMagicLink,
-} from "@nearpay/spec";
-import type { InternalClaims } from "@nearpay-internal/auth";
-import { toUuid } from "@nearpay-internal/ids";
-import { ApiError, implement, type RequestContext, type RouteBinding, respond } from "@nearpay-internal/service";
-import {
-  authorize as authorizeRoute,
-  getInternalOpsOperator,
-  getInternalSettlementDestination,
-  getJwks,
-  getNotificationRecipients,
-  getOpsMerchant,
-  getOpsSession,
-  getSettlementContext,
-  listOpsAuditEvents,
-  listOpsMerchants,
-  mintServiceToken,
-  opsEnrolmentVerify,
-  opsLogout,
-  opsPasskeyAuthenticationOptions,
-  opsPasskeyAuthenticationVerify,
-  opsPasskeyRegistrationOptions,
-  opsPasskeyRegistrationVerify,
-  opsStepUpOptions,
-  opsStepUpVerify,
-} from "@nearpay-internal/spec";
+} from "@nearpay-money/spec";
 import { getRequirements, updateAccount as patchAccount, getAccount as readAccount } from "../app/accounts.js";
 import { createKey, listKeys, revokeKey, rollKey, updateKey } from "../app/api-keys.js";
 import * as audits from "../app/audit.js";

@@ -31,7 +31,7 @@
     "@nearpay-internal/intents": "0.3.1",
     "@nearpay-internal/service": "0.3.1",
     "@nearpay-internal/spec": "0.4.0",
-    "@nearpay/spec": "0.4.0",
+    "@nearpay-money/spec": "0.5.0",
     "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
     "@scure/base": "2.4.0",
@@ -55,7 +55,8 @@
   },
   "pnpm": {
     "overrides": {
-      "@nearpay/spec": "0.4.0",
+      "@nearpay-money/spec": "0.5.0",
+      "@nearpay/spec": "npm:@nearpay-money/spec@0.5.0",
       "@nearpay-internal/spec": "0.4.0"
     },
     "onlyBuiltDependencies": [
