@@ -126,9 +126,9 @@ describe("configuration", () => {
     p === "/s/db" ? "postgres://u:p@h:5432/d" : p === "/s/kek" ? Buffer.alloc(32, 1).toString("base64") : "x";
   const load = (extra: Record<string, string> = {}) => loadConfig(apiShape, { env: { ...env, ...extra }, readFile });
 
-  it("defaults: passkey mode, hardware keys only, cool-off 86 400 s", () => {
+  it("defaults: passkey mode, hardware keys only, no cool-off (owner decision 2026-11-11)", () => {
     const c = load();
-    expect([c.opsAuthMode, c.opsAllowPlatformPasskeys, c.cooloffSeconds]).toEqual(["passkey", false, 86_400]);
+    expect([c.opsAuthMode, c.opsAllowPlatformPasskeys, c.cooloffSeconds]).toEqual(["passkey", false, 0]);
     const cc = consoleConfig(c);
     expect(betaFlagValues({ console: cc })).toEqual({
       NP_OPS_ALLOW_PLATFORM_PASSKEYS: 0,
@@ -205,6 +205,8 @@ describe("boot metrics", () => {
     expect(text).toContain("nearpay_identity_destination_cooloff_seconds 0");
     expect(text).toContain('nearpay_identity_ops_operators_active{role="ops_admin"} 1');
     expect(lines.some((l) => l.startsWith("W BETA relaxation ON: NP_OPS_ALLOW_PLATFORM_PASSKEYS=true"))).toBe(true);
-    expect(lines.some((l) => l.startsWith("W NP_COOLOFF_SECONDS=0"))).toBe(true);
+    // no cool-off is the intended default: an info line, never a warning
+    expect(lines.some((l) => l.startsWith("I destination cool-off: none"))).toBe(true);
+    expect(lines.some((l) => l.startsWith("W") && l.includes("cool-off"))).toBe(false);
   });
 });

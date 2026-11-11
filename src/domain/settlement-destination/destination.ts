@@ -6,12 +6,16 @@
  * | —                    | create (test mode) | screening allow                          | active (verification `test`)    |
  * | —                    | create (live)      | screening allow, unique, no recovery lock | pending_verification            |
  * | pending_verification | challenge          | earlier unused challenges superseded     | pending_verification (fresh challenge) |
- * | pending_verification | attest             | signature valid, challenge fresh         | cooling_off (1 approver, Stage 1) / pending_approval (2) |
- * | pending_approval     | approve            | qualifying approvers ≥ required (approval.ts) | cooling_off                |
+ * | pending_verification | attest             | signature valid, challenge fresh, approvals complete | active (no cool-off, screen allow; the default) / cooling_off (cool-off > 0) |
+ * | pending_verification | attest             | signature valid, challenge fresh, approvals incomplete | pending_approval   |
+ * | pending_approval     | approve            | qualifying approvers ≥ required (approval.ts) | active (no cool-off, screen allow) / cooling_off (cool-off > 0) |
  * | cooling_off          | activate (job)     | not disabled, re-screen allow, approvals still complete | active           |
  * | cooling_off          | require_approval (job) | approvals no longer complete (team changed) | pending_approval         |
  * | pending_verification / pending_approval | expire (job) | 7 days after creation           | disabled                        |
  * | any but disabled     | disable / blocked  | —                                        | disabled                        |
+ *
+ * Owner decision 2026-11-11 (final): payout wallets activate the moment ownership is attested (and the
+ * last required approval lands); `cooling_off` is only reached when an operator sets a cool-off > 0.
  */
 
 export type DestinationStatus = "pending_verification" | "pending_approval" | "cooling_off" | "active" | "disabled";
@@ -29,17 +33,25 @@ export type Step =
   | { readonly ok: true; readonly to: DestinationStatus }
   | { readonly ok: false; readonly state: DestinationStatus };
 
-/** Where `command` moves a destination in `from` (approvals: how many are required after the attestation). */
-export function transition(from: DestinationStatus, command: Command, o: { approvalsRequired?: number } = {}): Step {
+/**
+ * Where `command` moves a destination in `from` (approvalsRequired: how many are required after the
+ * attestation; cooloff: whether a cool-off > 0 is configured — without one, complete approvals activate).
+ */
+export function transition(
+  from: DestinationStatus,
+  command: Command,
+  o: { approvalsRequired?: number; cooloff?: boolean } = {},
+): Step {
+  const complete: DestinationStatus = o.cooloff ? "cooling_off" : "active";
   switch (command) {
     case "challenge":
       return from === "pending_verification" ? { ok: true, to: from } : { ok: false, state: from };
     case "attest":
       return from === "pending_verification"
-        ? { ok: true, to: (o.approvalsRequired ?? 1) > 1 ? "pending_approval" : "cooling_off" }
+        ? { ok: true, to: (o.approvalsRequired ?? 1) > 1 ? "pending_approval" : complete }
         : { ok: false, state: from };
     case "approve":
-      return from === "pending_approval" ? { ok: true, to: "cooling_off" } : { ok: false, state: from };
+      return from === "pending_approval" ? { ok: true, to: complete } : { ok: false, state: from };
     case "activate":
       return from === "cooling_off" ? { ok: true, to: "active" } : { ok: false, state: from };
     case "require_approval":

@@ -111,11 +111,15 @@ describe("turnstile", () => {
 });
 
 describe("configuration", () => {
-  it("a zero cool-off is allowed on every stage, with a boot notice (owner decision 2026-11-09)", () => {
-    expect(cooloffNotice({ env: "server", cooloffSeconds: 0 })).toMatch(/NP_COOLOFF_SECONDS=0: .*as soon as/);
-    expect(cooloffNotice({ env: "local", cooloffSeconds: 0 })).toMatch(/NP_COOLOFF_SECONDS=0/);
-    expect(cooloffNotice({ env: "server", cooloffSeconds: 600 })).toMatch(/600 s after attestation/);
-    expect(cooloffNotice({ env: "server", cooloffSeconds: 86_400 })).toBeNull();
+  it("no cool-off by default and on every stage; the boot line is informational (owner decision 2026-11-11)", () => {
+    expect(cooloffNotice({ env: "server", cooloffSeconds: 0 })).toMatch(
+      /cool-off: none .*as soon as they are attested/,
+    );
+    expect(cooloffNotice({ env: "local", cooloffSeconds: 0 })).toMatch(/cool-off: none/);
+    expect(cooloffNotice({ env: "server", cooloffSeconds: 600 })).toMatch(
+      /NP_COOLOFF_SECONDS=600 .*600 s after attestation/,
+    );
+    expect(cooloffNotice({ env: "server", cooloffSeconds: 86_400 })).toMatch(/86400 s after attestation/);
     expect(isDevEnv("test") && isDevEnv("local") && !isDevEnv("server") && !isDevEnv("staging")).toBe(true);
   });
 });

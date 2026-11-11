@@ -4,7 +4,8 @@
  *
  * - `nearpay_ops_beta_flag{flag}` — 1 while a relaxation is on: `NP_OPS_ALLOW_PLATFORM_PASSKEYS` (beta
  *   only) and `NP_OPS_AUTH_MODE=cloudflare_access`; 0 otherwise. Unprefixed, the same name in every service.
- * - `nearpay_identity_destination_cooloff_seconds` — the configured destination cool-off.
+ * - `nearpay_identity_destination_cooloff_seconds` — the configured destination cool-off (0 by default,
+ *   owner decision 2026-11-11; logged at info either way).
  * - `nearpay_identity_ops_operators_active{role}` — active operators (a single `ops_admin` = the adaptive
  *   two-person rule lets that operator complete two-person actions alone).
  */
@@ -55,7 +56,5 @@ export function announceCooloff(log: Logger, m: ServiceMetrics, c: { env: string
   m.gauge("destination_cooloff_seconds", "Configured cool-off of new settlement destinations (seconds).").set(
     c.cooloffSeconds,
   );
-  const notice = cooloffNotice(c);
-  if (notice) log.warn({ cooloff_seconds: c.cooloffSeconds }, notice);
-  else log.info({ cooloff_seconds: c.cooloffSeconds }, "destination cool-off");
+  log.info({ cooloff_seconds: c.cooloffSeconds }, cooloffNotice(c));
 }

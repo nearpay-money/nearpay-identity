@@ -24,17 +24,17 @@ const shared = {
   /** CIDRs of the proxies in front of identity whose forwarding headers count (default: loopback + private ranges). */
   trustedProxies: list(z.string().min(1)).optional(),
   /**
-   * Cool-off of a new settlement destination, seconds (default 86 400). 0 is allowed on every stage (owner
-   * decision 2026-11-09: a business accepting payments must not wait); the boot log warns and the gauge
-   * `nearpay_identity_destination_cooloff_seconds` shows the value. Ownership attestation, step-up, the
-   * two-approver rule and the audit stay.
+   * Cool-off of a new settlement destination, seconds (default 0: owner decision 2026-11-11, final — a
+   * payout wallet is active the moment its ownership is attested and the last required approval lands).
+   * An operator may still set up to 30 days; the gauge `nearpay_identity_destination_cooloff_seconds`
+   * shows the value. Ownership attestation, screening, step-up, the two-approver rule and the audit stay.
    */
   cooloffSeconds: z.coerce
     .number()
     .int()
     .min(0)
     .max(30 * 86_400)
-    .default(86_400),
+    .default(0),
 };
 
 export const apiShape = {
@@ -115,15 +115,13 @@ export type WorkerConfig = z.output<z.ZodObject<typeof workerShape>>;
 export type OpsConfig = z.output<z.ZodObject<typeof opsShape>>;
 
 /**
- * The cool-off may be anything from 0 to 30 days on every stage (owner decision 2026-11-09). A short one
- * is reported at boot (warn) — the other protections (ownership attestation, step-up, two approvers,
- * audit, the activation security email) stay. Returns the boot log line, or null for the default.
+ * The boot log line for the destination cool-off (owner decision 2026-11-11: none by default, an operator
+ * may set up to 30 days). Informational either way — 0 is the intended setting, not a relaxation.
  */
-export function cooloffNotice(c: { env: string; cooloffSeconds: number }): string | null {
-  if (c.cooloffSeconds >= 86_400) return null;
-  return `NP_COOLOFF_SECONDS=${c.cooloffSeconds}: new settlement destinations activate ${
-    c.cooloffSeconds === 0 ? "as soon as they are attested and approved" : `${c.cooloffSeconds} s after attestation`
-  } (default 86400); attestation, step-up, two approvers and the activation security email still apply`;
+export function cooloffNotice(c: { env: string; cooloffSeconds: number }): string {
+  return c.cooloffSeconds === 0
+    ? "destination cool-off: none — payout wallets activate as soon as they are attested and approved"
+    : `destination cool-off: NP_COOLOFF_SECONDS=${c.cooloffSeconds} — payout wallets activate ${c.cooloffSeconds} s after attestation and approval`;
 }
 
 /** `cloudflare_access` needs the Access audience and team domain (the console would refuse everything otherwise). */

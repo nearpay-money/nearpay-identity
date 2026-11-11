@@ -10,26 +10,35 @@ import {
 
 describe("destination lifecycle properties", () => {
   const command = fc.constantFrom<Command>("challenge", "attest", "approve", "activate", "disable", "set_default");
-  it("a destination is active only via attestation and cool-off; disabled is terminal", () => {
+  it("a destination is active only via attestation (and the cool-off, when one is set); disabled is terminal", () => {
     fc.assert(
-      fc.property(fc.array(command, { maxLength: 30 }), fc.integer({ min: 1, max: 2 }), (cmds, approvals) => {
-        let s: DestinationStatus = "pending_verification";
-        let attested = false;
-        let cooled = false;
-        for (const c of cmds) {
-          const r = transition(s, c, { approvalsRequired: approvals });
-          if (!r.ok) {
-            expect(r.state).toBe(s);
-            continue;
+      fc.property(
+        fc.array(command, { maxLength: 30 }),
+        fc.integer({ min: 1, max: 2 }),
+        fc.boolean(),
+        (cmds, approvals, cooloff) => {
+          let s: DestinationStatus = "pending_verification";
+          let attested = false;
+          let cooled = false;
+          for (const c of cmds) {
+            const r = transition(s, c, { approvalsRequired: approvals, cooloff });
+            if (!r.ok) {
+              expect(r.state).toBe(s);
+              continue;
+            }
+            if (s === "disabled") throw new Error("left disabled");
+            if (c === "challenge") expect([s, r.to]).toEqual(["pending_verification", "pending_verification"]);
+            if (c === "attest") attested = true;
+            if (r.to === "cooling_off") cooled = true;
+            // without a cool-off (the default, owner decision 2026-11-11) nothing ever cools off
+            if (!cooloff) expect(r.to).not.toBe("cooling_off");
+            // two approvers: never active straight from the attestation
+            if (approvals > 1 && c === "attest") expect(r.to).toBe("pending_approval");
+            s = r.to;
+            if (s === "active") expect(attested && (cooled || !cooloff)).toBe(true);
           }
-          if (s === "disabled") throw new Error("left disabled");
-          if (c === "challenge") expect([s, r.to]).toEqual(["pending_verification", "pending_verification"]);
-          if (c === "attest") attested = true;
-          if (r.to === "cooling_off") cooled = true;
-          s = r.to;
-          if (s === "active") expect(attested && cooled).toBe(true);
-        }
-      }),
+        },
+      ),
     );
   });
 });

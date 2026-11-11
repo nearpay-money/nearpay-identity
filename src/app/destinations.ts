@@ -3,10 +3,12 @@
  * the row, a transition row and the outbox event in one transaction.
  *
  * Live: create (screening allow, unique, no recovery lock) → pending_verification + challenge →
- * attest (NEP-413 / EIP-191 ownership proof) → cooling_off (`active_at = now + cool-off`, every
- * owner/admin notified) → job `destination.activate` (re-screen) → active. Test mode: active at
- * once with `verification: test`. Only a stepped-up owner/admin session can change destinations;
- * API keys never can.
+ * attest (NEP-413 / EIP-191 ownership proof) → [pending_approval → last approval] → active in the same
+ * request (owner decision 2026-11-11, final: no cool-off by default — the address is screened again just
+ * before, outside the transaction, and a block disables it). Only with an explicit cool-off > 0
+ * (`NP_COOLOFF_SECONDS`): cooling_off (`active_at = now + cool-off`) → job `destination.activate`
+ * (re-screen) → active. Test mode: active at once with `verification: test`. Only a stepped-up
+ * owner/admin session can change destinations; API keys never can.
  */
 import { randomBytes } from "node:crypto";
 import { getChain, validateAddress } from "@nearpay-internal/chains";
@@ -55,6 +57,8 @@ import {
 export const ACTIVATE_JOB = "destination.activate";
 
 type DestinationEvent = "created" | "pending_approval" | "cooling_off" | "activated" | "disabled" | "default_changed";
+
+type Screening = Awaited<ReturnType<Identity["peers"]["screen"]>>;
 
 // ---------------------------------------------------------------------------------------------
 // Reads
@@ -107,12 +111,12 @@ async function managerGrants(db: Identity["db"] | Tx, accountUuid: string): Prom
 }
 
 /** What the two-approver rule is evaluated against, on the database clock (the trigger's clock). */
-async function approvalContext(id: Identity, tx: Tx, d: DestinationRow): Promise<ApprovalContext> {
+async function approvalContext(id: Identity, db: Identity["db"] | Tx, d: DestinationRow): Promise<ApprovalContext> {
   return {
     createdAt: d.created_at.getTime(),
-    now: (await dbNow(tx)).getTime(),
+    now: (await dbNow(db)).getTime(),
     cooloffMs: id.cooloffMs,
-    grants: await managerGrants(tx, d.account_id),
+    grants: await managerGrants(db, d.account_id),
   };
 }
 
@@ -676,6 +680,17 @@ export async function attestDestination(
     id.log.info({ destination: destinationId, standard: b.standard, reason: result.reason }, "attestation rejected");
     throw new ApiError("attestation_invalid", result.hint ? { message: result.hint } : {});
   }
+  // no cool-off and the approvals already complete: this request activates it — screen first (no
+  // network call inside the transaction; unavailable → 503, the challenge stays unused for a retry)
+  const screening =
+    id.cooloffMs === 0 &&
+    afterAttestation(
+      await approvalContext(id, id.db, d0),
+      d0.approvals_required,
+      records(await approvalsFor(id.db, d0)),
+    ).to === "cooling_off"
+      ? await screenForActivation(id, d0)
+      : null;
 
   return withTx(id.db, async (tx) => {
     const d = await loadOwn(tx, accountId, livemode, destinationId, true);
@@ -696,7 +711,6 @@ export async function attestDestination(
     const approvals = await approvalsFor(tx, d);
     // two approvers required (now, not only at creation) and not enough qualifying approvals: wait
     const { required, to } = afterAttestation(ctx, d.approvals_required, records(approvals));
-    const activeAt = new Date(now.getTime() + id.cooloffMs);
     const attestation = {
       standard: b.standard,
       message: c.message,
@@ -708,17 +722,19 @@ export async function attestDestination(
     // a concurrent attestation of the same address by another account loses on the unique index
     let next: DestinationRow;
     try {
-      next = await record(id, tx, d, to, "attested", actor.id, {
-        attestation,
-        approvals_required: required,
-        ...(to === "cooling_off" ? { active_at: activeAt } : {}),
-      });
+      if (to === "cooling_off")
+        next = await approvalsComplete(id, tx, d, screening, "attested", actor.id, {
+          attestation,
+          approvals_required: required,
+        });
+      else {
+        next = await record(id, tx, d, to, "attested", actor.id, { attestation, approvals_required: required });
+        await emitDestination(tx, next, "pending_approval");
+      }
     } catch (e) {
       if ((e as { code?: string }).code === "23505") throw new ApiError("destination_in_use");
       throw e;
     }
-    if (to === "cooling_off") await startCooloff(tx, next, activeAt);
-    else await emitDestination(tx, next, "pending_approval");
     await audit(id, tx, {
       accountUuid: d.account_id,
       actor,
@@ -727,14 +743,66 @@ export async function attestDestination(
       details: {
         standard: b.standard,
         method: result.method,
-        ...(to === "cooling_off" ? { active_at: activeAt.toISOString() } : { awaiting_approval: true }),
+        ...(next.status === "pending_approval"
+          ? { awaiting_approval: true }
+          : next.status === "disabled"
+            ? { screening: "block" }
+            : { status: next.status, active_at: next.active_at?.toISOString() ?? null }),
       },
     });
-    return destinationView(next, { isDefault: false, minUsdMicros: null, approvals });
+    const defs = await defaultsOf(tx, next.account_id, next.livemode);
+    return destinationView(next, { isDefault: isDefaultIn(defs, next), minUsdMicros: null, approvals });
   });
 }
 
-/** Cool-off start (after attestation or the last approval): event, then the activation job at `active_at`. */
+/**
+ * The screening a destination is activated on, outside any transaction (fail closed: unavailable →
+ * `503 screening_unavailable`, nothing changes and the request can be retried).
+ */
+async function screenForActivation(id: Identity, d: DestinationRow): Promise<Screening> {
+  try {
+    return await id.peers.screen({
+      subject_type: "destination",
+      chain: d.chain,
+      subject: d.address_norm,
+      context: "destination",
+      account_id: fromUuid("acct", d.account_id),
+      livemode: d.livemode,
+    });
+  } catch (e) {
+    id.log.error({ err: e }, "destination screening unavailable");
+    throw new ApiError("screening_unavailable");
+  }
+}
+
+/**
+ * The approvals of `d` are complete (attestation or the last approval). Without a cool-off (the
+ * default, owner decision 2026-11-11) it is active now on `screening` (`activated`, the default
+ * destination when it is the first, live mode refreshed; a block disables it with reason `compliance`,
+ * as the activation job does). With a cool-off > 0 — or when this request did not screen because the
+ * approvals only completed inside the transaction — it cools off until `active_at` and the job
+ * activates it.
+ */
+async function approvalsComplete(
+  id: Identity,
+  tx: Tx,
+  d: DestinationRow,
+  screening: Screening | null,
+  cause: string,
+  actor: string,
+  set: Parameters<typeof record>[6],
+): Promise<DestinationRow> {
+  if (id.cooloffMs === 0 && screening) {
+    if (screening.decision === "block") return disableRow(id, tx, d, "compliance", "system:activation-screening");
+    return becomeActive(id, tx, d, cause, actor, { ...set, screening_id: screening.screening_id });
+  }
+  const activeAt = new Date((await dbNow(tx)).getTime() + id.cooloffMs);
+  const next = await record(id, tx, d, "cooling_off", cause, actor, { ...set, active_at: activeAt });
+  await startCooloff(tx, next, activeAt);
+  return next;
+}
+
+/** Cool-off start (cool-off > 0 only): event, then the activation job at `active_at`. */
 async function startCooloff(tx: Tx, d: DestinationRow, activeAt: Date) {
   await emitDestination(tx, d, "cooling_off");
   await enqueueJob(tx, {
@@ -752,8 +820,10 @@ async function startCooloff(tx: Tx, d: DestinationRow, activeAt: Date) {
  * earlier approver, and (to approve) hold the role under a grant older than the destination and past
  * its tenure (`403 approver_conflict`; domain/approval/approval.ts, repeated by the approvals primary
  * key and the `destination_approvals_complete` trigger); the requirement is re-derived from today's
- * team and its 30-day high-water mark; destinations pending 7 days are expired (`409 state_conflict`). The last approval starts the cool-off (job at
- * `active_at`); a rejection disables the destination (`merchant`). Only `pending_approval`.
+ * team and its 30-day high-water mark; destinations pending 7 days are expired (`409 state_conflict`).
+ * The last approval activates it in the same request (no cool-off, the default: screened just before,
+ * outside the transaction) or starts the cool-off (job at `active_at`) when one is configured; a
+ * rejection disables the destination (`merchant`). Only `pending_approval`.
  */
 export async function approveDestination(
   id: Identity,
@@ -763,6 +833,23 @@ export async function approveDestination(
   decision: Decision,
   actor: Actor & { userUuid: string },
 ) {
+  // no cool-off and this approval would complete it: screen before the transaction (see attest)
+  let screening: Screening | null = null;
+  if (id.cooloffMs === 0 && decision === "approve") {
+    const d0 = await loadOwn(id.db, accountId, livemode, destinationId);
+    const pre = decide(
+      {
+        ...(await approvalContext(id, id.db, d0)),
+        status: d0.status,
+        required: d0.approvals_required,
+        createdBy: d0.created_by,
+        approvals: records(await approvalsFor(id.db, d0)),
+      },
+      actor.userUuid,
+      decision,
+    );
+    if (pre.ok && pre.to === "cooling_off") screening = await screenForActivation(id, d0);
+  }
   return withTx(id.db, async (tx) => {
     const d = await loadOwn(tx, accountId, livemode, destinationId, true);
     // the role in the request token may be up to 10 s old: re-check the membership in this transaction
@@ -817,14 +904,9 @@ export async function approveDestination(
     }
     let next = d;
     if (out.to === "disabled") next = await disableRow(id, tx, d, "merchant", actor.id);
-    else if (out.to === "cooling_off") {
-      const activeAt = new Date((await dbNow(tx)).getTime() + id.cooloffMs);
-      next = await record(id, tx, d, "cooling_off", "approved", actor.id, {
-        active_at: activeAt,
-        approvals_required: out.required,
-      });
-      await startCooloff(tx, next, activeAt);
-    } else if (out.required > d.approvals_required)
+    else if (out.to === "cooling_off")
+      next = await approvalsComplete(id, tx, d, screening, "approved", actor.id, { approvals_required: out.required });
+    else if (out.required > d.approvals_required)
       // the requirement only ever rises (the public `approval.required` shows it)
       next = await tx
         .updateTable("settlement_destinations")
@@ -839,7 +921,12 @@ export async function approveDestination(
       target: { type: "settlement_destination", id: destinationId },
       details: { status: next.status, approvals_required: d.approvals_required },
     });
-    return destinationView(next, { isDefault: false, minUsdMicros: null, approvals: await approvalsFor(tx, next) });
+    const defs = await defaultsOf(tx, next.account_id, next.livemode);
+    return destinationView(next, {
+      isDefault: isDefaultIn(defs, next),
+      minUsdMicros: null,
+      approvals: await approvalsFor(tx, next),
+    });
   });
 }
 

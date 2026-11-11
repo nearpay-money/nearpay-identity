@@ -1,7 +1,9 @@
 /**
  * Stage 2 money-path controls through the gateway: the two-approver rule for live destinations
  * (application + database), restricted keys (scopes at the gateway, updateApiKey) and the recovery
- * flow with its 48 h destination lock.
+ * flow with its 48 h destination lock. Runs with an explicit cool-off (3600 s) to keep the operator-set
+ * cool-off path covered (cooling_off → activation job); the default (no cool-off) is covered in
+ * destinations.test.ts.
  */
 import { sql } from "@nearpay-internal/db";
 import { toUuid } from "@nearpay-internal/ids";
@@ -79,7 +81,7 @@ const setRole = async (by: User, u: User, role: string) => {
 };
 
 describe("two-approver rule", () => {
-  it("a single-admin account goes straight to cool-off; the creator is the approval", async () => {
+  it("with a cool-off set, a single-admin account goes straight to cool-off; the creator is the approval", async () => {
     const solo = await signUp(s, "solo@approve.test");
     const { created, attested } = await liveDestination(solo);
     expect(created.approval).toEqual({ required: 1, approved_by: [solo.userId], rejected_by: null });
