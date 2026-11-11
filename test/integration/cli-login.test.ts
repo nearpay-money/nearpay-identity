@@ -3,6 +3,10 @@
  * slow_down, expiry and the uncollected-key revocation, the anonymous allow-list (CLI login and
  * hosted invoice routes, §11), and billing's service client (spec 0.3.0 SERVICE_CLIENT_SCOPES).
  */
+
+import { sql } from "@nearpay-internal/db";
+import { toUuid } from "@nearpay-internal/ids";
+import { getSettlementContext } from "@nearpay-internal/spec";
 import {
   CLI_KEY_SCOPES,
   CLI_KEY_TTL_SECONDS,
@@ -10,10 +14,7 @@ import {
   CliLoginPoll,
   CliLoginRequest,
   SERVICE_CLIENT_SCOPES,
-} from "@nearpay/spec";
-import { sql } from "@nearpay-internal/db";
-import { toUuid } from "@nearpay-internal/ids";
-import { getSettlementContext } from "@nearpay-internal/spec";
+} from "@nearpay-money/spec";
 import { decodeJwt } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { expireCliLogins } from "../../src/app/cli-logins.js";

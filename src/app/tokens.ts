@@ -6,8 +6,8 @@
 import { createHash, createPrivateKey, createPublicKey, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { SERVICE_CLIENT_SCOPES, SERVICES, type ServiceName, TOKEN_TTL_SECONDS } from "@nearpay/spec";
 import { type ClaimsInput, loadSigningKey, publicJwk, type SigningKey, signInternalJwt } from "@nearpay-internal/auth";
+import { SERVICE_CLIENT_SCOPES, SERVICES, type ServiceName, TOKEN_TTL_SECONDS } from "@nearpay-money/spec";
 
 export interface Signer {
   readonly current: SigningKey;

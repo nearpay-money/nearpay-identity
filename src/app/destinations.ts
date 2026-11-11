@@ -9,13 +9,13 @@
  * API keys never can.
  */
 import { randomBytes } from "node:crypto";
-import type { DESTINATION_SIGNING_STANDARDS } from "@nearpay/spec";
 import { getChain, validateAddress } from "@nearpay-internal/chains";
 import { enqueueJob, sql, withTx } from "@nearpay-internal/db";
 import { HttpError } from "@nearpay-internal/http";
 import { fromUuid, toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { ApiError } from "@nearpay-internal/service";
 import type { Subject } from "@nearpay-internal/spec";
+import type { DESTINATION_SIGNING_STANDARDS } from "@nearpay-money/spec";
 import {
   type ApprovalContext,
   afterAttestation,

@@ -5,6 +5,10 @@
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { unhandledSubjects } from "@nearpay-internal/bus";
+import { sql } from "@nearpay-internal/db";
+import { unimplementedRoutes } from "@nearpay-internal/service";
+import { INTERNAL_ROUTES, OPS_ROUTES, SUBJECTS, type Subject } from "@nearpay-internal/spec";
 import {
   approveCliLogin,
   attestSettlementDestination,
@@ -27,11 +31,7 @@ import {
   pollCliLogin,
   SettlementDestination,
   SPEC_VERSION,
-} from "@nearpay/spec";
-import { unhandledSubjects } from "@nearpay-internal/bus";
-import { sql } from "@nearpay-internal/db";
-import { unimplementedRoutes } from "@nearpay-internal/service";
-import { INTERNAL_ROUTES, OPS_ROUTES, SUBJECTS, type Subject } from "@nearpay-internal/spec";
+} from "@nearpay-money/spec";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { identityRoutes } from "../../src/api/routes.js";
 import { identityHandlers } from "../../src/consumers/handlers.js";
@@ -75,7 +75,7 @@ describe("routes and events", () => {
   });
 
   it("is built against spec 0.4.0; Stage 1 routes keep their shape", () => {
-    expect(SPEC_VERSION).toBe("0.4.0");
+    expect(SPEC_VERSION).toBe("0.5.0"); // public package renamed to @nearpay-money/spec (0.5.0 = 0.4.2 contracts)
     const bound = identityRoutes({} as never, { touches: {} as never, serviceClients: new Map() }).map(
       (b) => b.route.id,
     );

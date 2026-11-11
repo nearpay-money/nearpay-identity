@@ -11,16 +11,17 @@
  * - An approved key nobody collected within 15 min is revoked by the expiry job: a secret never
  *   delivered must not stay usable or stored.
  */
+
+import { type Selectable, sql, withTx } from "@nearpay-internal/db";
+import { fromUuid, toUuid, uuidv7 } from "@nearpay-internal/ids";
+import { ApiError } from "@nearpay-internal/service";
 import {
   CLI_KEY_SCOPES,
   CLI_KEY_TTL_SECONDS,
   CLI_LOGIN_POLL_INTERVAL_SECONDS,
   CLI_LOGIN_TTL_SECONDS,
   KEY_SCOPES,
-} from "@nearpay/spec";
-import { type Selectable, sql, withTx } from "@nearpay-internal/db";
-import { fromUuid, toUuid, uuidv7 } from "@nearpay-internal/ids";
-import { ApiError } from "@nearpay-internal/service";
+} from "@nearpay-money/spec";
 import { checkScopes } from "../domain/api-key/key.js";
 import {
   CREATE_LIMIT,

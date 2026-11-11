@@ -50,13 +50,13 @@ nearpay-identity/
 
 ## Commands
 
-| Command                                                                                                     | What it does                                                                                                                                        |
-| ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm install`                                                                                              | Install (Node 22, pnpm 9); `@nearpay/*` and `@nearpay-internal/*` come from the local registry (`.npmrc`, `nearpay-deploy/scripts/up.sh` starts it) |
-| `pnpm test`                                                                                                 | Unit and property tests                                                                                                                             |
-| `pnpm test:integration`                                                                                     | Integration and contract tests on real Postgres, Valkey and NATS (Testcontainers; needs Docker)                                                     |
-| `pnpm verify`                                                                                               | typecheck + lint + unit tests with the coverage gate + integration tests + build                                                                    |
-| `docker build --network host --build-arg NP_REGISTRY_URL=http://127.0.0.1:4873 -t nearpay/identity:local .` | Image (what `up.sh` runs)                                                                                                                           |
+| Command                                                                                                     | What it does                                                                                                                                              |
+| ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm install`                                                                                              | Install (Node 22, pnpm 9); `@nearpay-money/*` and `@nearpay-internal/*` come from the local registry (`.npmrc`, `nearpay-deploy/scripts/up.sh` starts it) |
+| `pnpm test`                                                                                                 | Unit and property tests                                                                                                                                   |
+| `pnpm test:integration`                                                                                     | Integration and contract tests on real Postgres, Valkey and NATS (Testcontainers; needs Docker)                                                           |
+| `pnpm verify`                                                                                               | typecheck + lint + unit tests with the coverage gate + integration tests + build                                                                          |
+| `docker build --network host --build-arg NP_REGISTRY_URL=http://127.0.0.1:4873 -t nearpay/identity:local .` | Image (what `up.sh` runs)                                                                                                                                 |
 
 ## Configuration
 
@@ -111,7 +111,7 @@ docker compose exec identity-api /nodejs/bin/node dist/ops.js seed-demo
 
 ## Status
 
-Stages 1–4 implemented against `@nearpay/spec` / `@nearpay-internal/spec` 0.4.0 and kit 0.3.1: every identity route (public, internal and console, CLI login) and every subject the catalogue routes to identity (migrations up to 0008), including Solana and BIP-322 destination ownership attestations (LLD §20).
+Stages 1–4 implemented against `@nearpay-money/spec` / `@nearpay-internal/spec` 0.4.0 and kit 0.3.1: every identity route (public, internal and console, CLI login) and every subject the catalogue routes to identity (migrations up to 0008), including Solana and BIP-322 destination ownership attestations (LLD §20).
 
 ## Built with
 

@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-      # @nearpay/* and @nearpay-internal/* come from a registry: the local Verdaccio in development,
+      # @nearpay-money/* and @nearpay-internal/* come from a registry: the local Verdaccio in development,
       # GitHub Packages once remotes exist (repository variable NP_REGISTRY_URL + secret NP_REGISTRY_TOKEN).
       - name: Point the NearPay scopes at the CI registry
         if: ${{ vars.NP_REGISTRY_URL != '' }}
@@ -25,7 +25,7 @@ jobs:
           host="${NP_REGISTRY_URL#http:}"
           host="${host#https:}"
           {
-            echo "@nearpay:registry=${NP_REGISTRY_URL}"
+            echo "@nearpay-money:registry=${NP_REGISTRY_URL}"
             echo "@nearpay-internal:registry=${NP_REGISTRY_URL}"
             echo "${host}:_authToken=${NP_REGISTRY_TOKEN}"
           } > .npmrc

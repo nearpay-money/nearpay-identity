@@ -5,11 +5,11 @@
  * verifies. Route-level authorization (scopes, roles, step-up) stays in each service, from the spec.
  */
 
-import { KEY_SCOPES, OPS_ROLE_SCOPES, type OpsRole, PUBLIC_ROUTES } from "@nearpay/spec";
 import type { ClaimsInput } from "@nearpay-internal/auth";
 import { fromUuid, isId, newId } from "@nearpay-internal/ids";
 import { ApiError } from "@nearpay-internal/service";
 import { OPS_ROUTES } from "@nearpay-internal/spec";
+import { KEY_SCOPES, OPS_ROLE_SCOPES, type OpsRole, PUBLIC_ROUTES } from "@nearpay-money/spec";
 import {
   expandScopes,
   ipAllowed,

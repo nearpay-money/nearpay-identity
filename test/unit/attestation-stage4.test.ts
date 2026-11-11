@@ -4,8 +4,8 @@
  * rules of `chains-solana-bitcoin.json`.
  */
 
-import { BITCOIN_MAINNET, DESTINATION_SIGNING_STANDARDS, SOLANA_MAINNET } from "@nearpay/spec";
 import { getChain, validateAddress } from "@nearpay-internal/chains";
+import { BITCOIN_MAINNET, DESTINATION_SIGNING_STANDARDS, SOLANA_MAINNET } from "@nearpay-money/spec";
 import { base64 } from "@scure/base";
 import * as btc from "@scure/btc-signer";
 import bs58 from "bs58";

@@ -4,7 +4,7 @@
  * client can send makes a verifier throw or accept something else.
  */
 
-import { BITCOIN_MAINNET, SOLANA_MAINNET } from "@nearpay/spec";
+import { BITCOIN_MAINNET, SOLANA_MAINNET } from "@nearpay-money/spec";
 import { base64 } from "@scure/base";
 import bs58 from "bs58";
 import fc from "fast-check";

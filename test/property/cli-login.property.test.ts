@@ -2,7 +2,7 @@
  * CLI login state machine (lld/identity.md §6.2): random interleavings of time, approvals, denials,
  * polls and the expiry job, driven through the same domain functions the use cases call.
  */
-import { CLI_LOGIN_POLL_INTERVAL_SECONDS, CLI_LOGIN_TTL_SECONDS } from "@nearpay/spec";
+import { CLI_LOGIN_POLL_INTERVAL_SECONDS, CLI_LOGIN_TTL_SECONDS } from "@nearpay-money/spec";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
