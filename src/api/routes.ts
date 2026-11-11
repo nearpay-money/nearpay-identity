@@ -39,12 +39,15 @@ import {
   disableSettlementDestination,
   getAccount,
   getAccountRequirements,
+  getAuthMethods,
   getCliLogin,
   getDashboardSession,
   getSettlementDestination,
+  googleCallback,
   listAccountAuditEvents,
   listApiKeys,
   listInvitations,
+  listLinkedIdentities,
   listMembers,
   listMemberships,
   listSettlementDestinations,
@@ -61,11 +64,14 @@ import {
   SERVICE_CLIENT_SCOPES,
   setDefaultSettlementDestination,
   signup,
+  startGoogleLink,
+  startGoogleSignIn,
   startRecovery,
   stepUpOptions,
   stepUpVerify,
   switchSessionAccount,
   TOKEN_TTL_SECONDS,
+  unlinkIdentity,
   updateAccount,
   updateApiKey,
   updateMember,
@@ -90,6 +96,7 @@ import {
   listDestinations,
   setDefaultDestination,
 } from "../app/destinations.js";
+import * as googleAuth from "../app/google.js";
 import { internalOpsOperator, notificationRecipients, settlementContext } from "../app/internal.js";
 import * as team from "../app/team.js";
 import { authenticateClient } from "../app/tokens.js";
@@ -153,7 +160,7 @@ export function identityRoutes(id: Identity, deps: RouteDeps): RouteBinding[] {
     implement(verifyMagicLink, async (ctx) => auth.verifyMagicLink(id, ctx.body.token)),
     implement(
       passkeyRegistrationOptions,
-      async (ctx) => (await auth.registrationOptions(id, ctx.body, ctx.principal)) as never,
+      async (ctx) => (await auth.registrationOptions(id, ctx.body, ctx.principal, meta(id, ctx))) as never,
     ),
     implement(passkeyRegistrationVerify, async (ctx) =>
       auth.registrationVerify(id, ctx.body as auth.RegistrationBody, ctx.principal, meta(id, ctx)),
@@ -176,6 +183,27 @@ export function identityRoutes(id: Identity, deps: RouteDeps): RouteBinding[] {
     }),
     implement(startRecovery, async (ctx) => {
       await auth.startRecovery(id, ctx.body, meta(id, ctx));
+    }),
+
+    // ---- Continue with Google (ADR-0026, spec 0.5.1) ------------------------------------------------
+    implement(getAuthMethods, async () => googleAuth.authMethods(id)),
+    implement(startGoogleSignIn, async (ctx) => googleAuth.startSignIn(id, ctx.body, meta(id, ctx))),
+    implement(googleCallback, async (ctx) => {
+      const r = await googleAuth.callback(id, ctx.query, meta(id, ctx));
+      // kit 0.3.x bindings emit 2xx only: the handler writes the 303 itself (the kit then sends nothing more)
+      ctx.reply
+        .code(303)
+        .header("location", r.location)
+        .header("set-cookie", [...r.cookies])
+        .header("cache-control", "no-store")
+        .header("referrer-policy", "no-referrer")
+        .send();
+      return respond(204, undefined) as never;
+    }),
+    implement(startGoogleLink, async (ctx) => googleAuth.startLink(id, principal(ctx), meta(id, ctx))),
+    implement(listLinkedIdentities, async (ctx) => googleAuth.listLinked(id, principal(ctx))),
+    implement(unlinkIdentity, async (ctx) => {
+      await googleAuth.unlink(id, principal(ctx), meta(id, ctx));
     }),
     implement(acceptInvitation, async (ctx) =>
       team.acceptInvitation(id, principal(ctx), ctx.body.token, meta(id, ctx)),

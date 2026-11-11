@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { parseKek } from "@nearpay-internal/db";
 import { baseConfigShape, flag, list, loadConfig, secret, url } from "@nearpay-internal/service";
+import { GOOGLE_CALLBACK_DASHBOARD_PATH } from "@nearpay-money/spec";
 import type { JWTVerifyGetKey } from "jose";
 import { z } from "zod";
 import { accessVerifier, deriveCsrfKey, normalizeTeamDomain } from "./app/console-access.js";
@@ -71,6 +72,17 @@ export const apiShape = {
   cfAccessTeamDomain: z.string().min(1).max(253).optional(),
   /** Access mode: the first operator (`ops_admin`), enrolled at boot while there is none. */
   opsBootstrapEmail: z.email().optional(),
+  /**
+   * Continue with Google (ADR-0026): the OAuth client id. Google sign-in is on only when this and the client
+   * secret file are both non-empty; otherwise it is off (the dashboard hides the button) and identity starts.
+   */
+  googleClientId: z.string().max(256).default(""),
+  /** `NP_GOOGLE_CLIENT_SECRET_FILE`; an absent variable or an empty file leaves Google sign-in off. */
+  googleClientSecret: secret(z.string().max(512)).optional(),
+  /** Tests and local mocks only (refused unless NP_ENV is local/test): Google's endpoints. */
+  googleAuthorizationUrl: url(["https:", "http:"]).optional(),
+  googleTokenUrl: url(["https:", "http:"]).optional(),
+  googleJwksUrl: url(["https:", "http:"]).optional(),
   /** `{"<chain id>": ["https://…"]}` for ERC-1271 contract-wallet attestations (optional). */
   evmRpcUrls: z
     .string()
@@ -236,9 +248,67 @@ export function checkServerConfig(
   if (c.opsOrigin) publicOrigin("NP_OPS_ORIGIN", c.opsOrigin);
 }
 
+export interface GoogleSettings {
+  readonly clientId: string;
+  readonly clientSecret: string;
+  /** `<NP_DASHBOARD_ORIGIN>/api/auth/google/callback` (spec GOOGLE_CALLBACK_DASHBOARD_PATH). */
+  readonly redirectUri: string;
+  readonly endpoints: { authorization: string; token: string; jwks: string } | null;
+}
+
+/**
+ * Google sign-in settings, or null (off) with the reason. Off unless both the client id and the secret are
+ * non-empty; the endpoint overrides are for local/test mocks only (a real deployment refuses to boot with them).
+ */
+export function googleSettings(
+  c: Pick<
+    ApiConfig,
+    | "env"
+    | "dashboardOrigin"
+    | "googleClientId"
+    | "googleClientSecret"
+    | "googleAuthorizationUrl"
+    | "googleTokenUrl"
+    | "googleJwksUrl"
+  >,
+): { settings: GoogleSettings | null; reason: string } {
+  const overrides = [c.googleAuthorizationUrl, c.googleTokenUrl, c.googleJwksUrl];
+  const overridden = overrides.some((v) => v !== undefined);
+  if (overridden && !isDevEnv(c.env))
+    throw new Error(
+      "NP_GOOGLE_AUTHORIZATION_URL / NP_GOOGLE_TOKEN_URL / NP_GOOGLE_JWKS_URL are for local/test mocks only",
+    );
+  if (overridden && overrides.some((v) => v === undefined))
+    throw new Error("set all of NP_GOOGLE_AUTHORIZATION_URL, NP_GOOGLE_TOKEN_URL and NP_GOOGLE_JWKS_URL, or none");
+  const clientId = c.googleClientId.trim();
+  const clientSecret = (c.googleClientSecret ?? "").trim();
+  if (!clientId && !clientSecret) return { settings: null, reason: "no Google client configured" };
+  if (!clientId)
+    return { settings: null, reason: "NP_GOOGLE_CLIENT_SECRET_FILE is set but NP_GOOGLE_CLIENT_ID is empty" };
+  if (!clientSecret)
+    return { settings: null, reason: "NP_GOOGLE_CLIENT_ID is set but the client secret file is absent or empty" };
+  if (!/^[A-Za-z0-9._-]+$/.test(clientId)) throw new Error("NP_GOOGLE_CLIENT_ID is not an OAuth client id");
+  return {
+    settings: {
+      clientId,
+      clientSecret,
+      redirectUri: `${new URL(c.dashboardOrigin).origin}${GOOGLE_CALLBACK_DASHBOARD_PATH}`,
+      endpoints: overridden
+        ? {
+            authorization: c.googleAuthorizationUrl as string,
+            token: c.googleTokenUrl as string,
+            jwks: c.googleJwksUrl as string,
+          }
+        : null,
+    },
+    reason: "configured",
+  };
+}
+
 export const readApiConfig = () => {
   const c = loadConfig(apiShape);
   checkServerConfig(c);
+  googleSettings(c); // a bad client id or a server-stage endpoint override fails at boot
   checkConsoleAuth(c);
   clientIpRule(c.env, { header: c.clientIpHeader, trustedProxies: c.trustedProxies }); // a bad CIDR fails at boot
   return c;

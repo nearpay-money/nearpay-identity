@@ -58,3 +58,17 @@ export function announceCooloff(log: Logger, m: ServiceMetrics, c: { env: string
   );
   log.info({ cooloff_seconds: c.cooloffSeconds }, cooloffNotice(c));
 }
+
+/**
+ * Continue with Google (ADR-0026): one boot line (on: redirect URI and client id; off: why) and the gauge
+ * `nearpay_identity_google_signin_enabled` (1/0). Off is a normal state (no client configured): identity starts.
+ */
+export function announceGoogle(log: Logger, m: ServiceMetrics, id: Pick<Identity, "google">, reason: string): void {
+  m.gauge("google_signin_enabled", "1 while Continue with Google is configured (ADR-0026).").set(id.google ? 1 : 0);
+  if (id.google)
+    log.info(
+      { google_signin: true, client_id: id.google.clientId, redirect_uri: id.google.redirectUri },
+      "Continue with Google: on",
+    );
+  else log.info({ google_signin: false, reason }, "Continue with Google: off");
+}

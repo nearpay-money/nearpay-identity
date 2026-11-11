@@ -22,6 +22,7 @@ import {
 } from "@simplewebauthn/server";
 import { DEFAULT_SETTINGS } from "../domain/account/account.js";
 import { isConsoleHost } from "../domain/authz/authz.js";
+import { passkeyAddGate, passkeySetupUntil } from "../domain/google/google.js";
 import {
   clearCookie,
   LIFETIME,
@@ -36,7 +37,7 @@ import {
   sha256,
 } from "../domain/session/session.js";
 import type { Role } from "../domain/team/team.js";
-import type { CeremonyPurpose } from "../infra/db/schema.js";
+import type { CeremonyPurpose, SessionAuthMethod } from "../infra/db/schema.js";
 import { audit, dbNow, emitEvent, type Identity, type Tx } from "./context.js";
 import { invitationForToken, joinInvitation } from "./team.js";
 import { accountView } from "./views.js";
@@ -209,12 +210,23 @@ export interface NewSession {
   readonly token: string;
   readonly csrf: string;
   readonly expiresAt: Date;
+  /** ADR-0026: how the session was created and when (drives `DashboardSession.sign_in`). */
+  readonly authMethod?: SessionAuthMethod;
+  readonly createdAt?: Date;
 }
 
 async function createSession(
   id: Identity,
   tx: Tx,
-  s: { kind: "dashboard" | "ops"; userId: string; accountId: string | null; meta: RequestMeta; steppedUp?: boolean },
+  s: {
+    kind: "dashboard" | "ops";
+    userId: string;
+    accountId: string | null;
+    meta: RequestMeta;
+    steppedUp?: boolean;
+    /** ADR-0026: a Google sign-in never counts as a step-up (callers pass steppedUp false). */
+    authMethod?: SessionAuthMethod;
+  },
 ): Promise<NewSession> {
   const token = newSecret(32);
   const csrf = newSecret(32);
@@ -237,9 +249,11 @@ async function createSession(
       last_seen_at: now,
       ip_enc: s.meta.ip ? id.cipher.encrypt(s.meta.ip, `session:${sid}:ip`) : null,
       user_agent: s.meta.userAgent?.slice(0, 300) ?? null,
+      auth_method: s.authMethod ?? "passkey",
+      created_at: now,
     })
     .execute();
-  return { token, csrf, expiresAt };
+  return { token, csrf, expiresAt, authMethod: s.authMethod ?? "passkey", createdAt: now };
 }
 
 export async function sessionBody(db: Identity["db"] | Tx, userId: string, accountId: string, s: NewSession) {
@@ -260,7 +274,76 @@ export async function sessionBody(db: Identity["db"] | Tx, userId: string, accou
     role: row.role,
     csrf_token: s.csrf,
     expires_at: Math.floor(s.expiresAt.getTime() / 1000),
+    ...(s.authMethod && s.createdAt ? { sign_in: await signInSummary(db, userId, s.authMethod, s.createdAt) } : {}),
   };
+}
+
+/** `DashboardSession.sign_in` (spec 0.5.1, ADR-0026). */
+export async function signInSummary(
+  db: Identity["db"] | Tx,
+  userId: string,
+  authMethod: SessionAuthMethod,
+  createdAt: Date,
+  now: number = Date.now(),
+) {
+  const [pk, google] = await Promise.all([
+    db
+      .selectFrom("passkeys")
+      .select((eb) => eb.fn.countAll<string>().as("n"))
+      .where("user_id", "=", userId)
+      .where("kind", "=", "dashboard")
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("linked_identities")
+      .select("subject")
+      .where("user_id", "=", userId)
+      .where("provider", "=", "google")
+      .executeTakeFirst(),
+  ]);
+  const passkeys = Number(pk.n);
+  const until = passkeySetupUntil({ passkeys, authMethod, createdAt, now });
+  return {
+    method: authMethod,
+    passkeys,
+    google_linked: google !== undefined,
+    passkey_setup_until: until ? Math.floor(until.getTime() / 1000) : null,
+  };
+}
+
+/** Number of dashboard passkeys of a user. */
+export async function dashboardPasskeyCount(db: Identity["db"] | Tx, userId: string): Promise<number> {
+  const r = await db
+    .selectFrom("passkeys")
+    .select((eb) => eb.fn.countAll<string>().as("n"))
+    .where("user_id", "=", userId)
+    .where("kind", "=", "dashboard")
+    .executeTakeFirstOrThrow();
+  return Number(r.n);
+}
+
+/**
+ * ADR-0026: adding a passkey from a session needs a fresh confirmation — a step-up (≤ 10 min) when the user
+ * has a passkey, else (Google-only) a Google sign-in within the last 10 minutes.
+ */
+async function requirePasskeyAddAllowed(
+  id: Identity,
+  db: Identity["db"] | Tx,
+  userId: string,
+  s: { step_up_at: Date | null; auth_method: SessionAuthMethod; created_at: Date },
+) {
+  const gate = passkeyAddGate({
+    passkeys: await dashboardPasskeyCount(db, userId),
+    stepUpAt: s.step_up_at,
+    authMethod: s.auth_method,
+    createdAt: s.created_at,
+    now: id.now(),
+    stepUpMs: STEP_UP_MS,
+  });
+  if (gate === "step_up_required") throw new ApiError("step_up_required");
+  if (gate === "reauthentication_required")
+    throw new ApiError("reauthentication_required", {
+      params: { reason: "continue with Google again to add your first passkey (within 10 minutes of signing in)" },
+    });
 }
 
 export const cookieFor = (kind: "dashboard" | "ops", s: NewSession) =>
@@ -295,7 +378,13 @@ export async function getDashboardSession(id: Identity, principal: { sub: string
   )
     throw new ApiError("authentication_required");
   const csrf = id.cipher.decrypt(s.csrf_enc, `session:${s.id}:csrf`).toString("utf8");
-  return sessionBody(id.db, s.user_id, s.account_id, { token: "", csrf, expiresAt: s.expires_at });
+  return sessionBody(id.db, s.user_id, s.account_id, {
+    token: "",
+    csrf,
+    expiresAt: s.expires_at,
+    authMethod: s.auth_method,
+    createdAt: s.created_at,
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -375,6 +464,7 @@ export async function registrationOptions(
   id: Identity,
   b: { registration_token?: string | undefined },
   principal: { ptype: string; sub: string } | null,
+  meta: RequestMeta,
 ) {
   let userName: string;
   let userHandle: Uint8Array;
@@ -382,6 +472,9 @@ export async function registrationOptions(
   let exclude: { credential_id: Buffer; transports: string[] }[] = [];
   if (principal?.ptype === "session" && !b.registration_token) {
     const userUuid = toUuid(principal.sub, "usr");
+    const session = await currentSession(id, meta, userUuid);
+    if (session.kind !== "dashboard") throw new ApiError("authentication_required");
+    await requirePasskeyAddAllowed(id, id.db, userUuid, session);
     const u = await id.db.selectFrom("users").select(["email"]).where("id", "=", userUuid).executeTakeFirstOrThrow();
     userName = u.email;
     userHandle = Buffer.from(userUuid.replaceAll("-", ""), "hex");
@@ -468,6 +561,7 @@ export async function registrationVerify(
       if (principal?.ptype !== "session" || toUuid(principal.sub, "usr") !== c.user_id)
         throw failed("session mismatch");
       const s = await currentSessionTx(tx, meta, c.user_id);
+      await requirePasskeyAddAllowed(id, tx, c.user_id, s);
       await tx.insertInto("passkeys").values(passkey(c.user_id)).execute();
       // the same CSRF token (re-issued from its encrypted copy): no rotation, no stale caches
       const csrf = id.cipher.decrypt(s.csrf_enc, `session:${s.id}:csrf`).toString("utf8");
@@ -475,9 +569,16 @@ export async function registrationVerify(
         accountUuid: s.account_id,
         actor: { type: "user", id: fromUuid("usr", c.user_id), ip: meta.ip },
         action: "passkey.added",
+        details: { session_method: s.auth_method },
       });
       return {
-        body: await sessionBody(tx, c.user_id, s.account_id as string, { token: "", csrf, expiresAt: s.expires_at }),
+        body: await sessionBody(tx, c.user_id, s.account_id as string, {
+          token: "",
+          csrf,
+          expiresAt: s.expires_at,
+          authMethod: s.auth_method,
+          createdAt: s.created_at,
+        }),
         cookie: null,
       };
     }
@@ -501,43 +602,73 @@ export async function registrationVerify(
     const already = await tx.selectFrom("users").select("id").where("email", "=", reg.email).executeTakeFirst();
     if (already) throw new ApiError("link_expired");
     if (reg.purpose === "invite") return joinAsNewUser(id, tx, reg, passkey, meta);
-    const userId = uuidv7();
-    const accountId = uuidv7();
-    await tx
-      .insertInto("users")
-      .values({ id: userId, email: reg.email, email_verified_at: now, last_login_at: now })
-      .execute();
-    const account = await tx
-      .insertInto("accounts")
-      .values({
-        id: accountId,
-        display_name: b.display_name ?? reg.email.split("@")[0]?.slice(0, 100) ?? "My business",
-        fee_schedule_id: DEFAULT_FEE_SCHEDULE,
-        api_version: API_VERSION,
-        settings: JSON.stringify(DEFAULT_SETTINGS),
-      })
-      .returningAll()
-      .executeTakeFirstOrThrow();
-    await tx.insertInto("memberships").values({ account_id: accountId, user_id: userId, role: "owner" }).execute();
-    await tx.insertInto("passkeys").values(passkey(userId)).execute();
-    const view = accountView(account);
-    await emitEvent(tx, {
-      subject: "evt.identity.account.created",
-      aggregate: { type: "account", id: view.id, version: account.version },
-      accountUuid: accountId,
-      livemode: null,
-      object: view,
-    });
-    await audit(id, tx, {
-      accountUuid: accountId,
-      actor: { type: "user", id: fromUuid("usr", userId), ip: meta.ip },
-      action: "account.created",
-      target: { type: "account", id: view.id },
+    const { userId, accountId } = await createOwnerUser(id, tx, {
+      email: reg.email,
+      displayName: b.display_name,
+      now,
+      meta,
+      method: "passkey",
+      beforeEvents: (uid) => tx.insertInto("passkeys").values(passkey(uid)).execute(),
     });
     const s = await createSession(id, tx, { kind: "dashboard", userId, accountId, meta, steppedUp: true });
     return { body: await sessionBody(tx, userId, accountId, s), cookie: cookieFor("dashboard", s) };
   });
   return out.cookie ? respond(200, out.body, { "set-cookie": out.cookie }) : out.body;
+}
+
+/**
+ * Sign-up's new user (email verified), account and owner membership, `evt.identity.account.created` and the
+ * `account.created` audit row, in the caller's transaction. Shared by passkey sign-up and Google sign-up
+ * (ADR-0026: the same path, the email verified by Google instead of a magic link).
+ */
+export async function createOwnerUser(
+  id: Identity,
+  tx: Tx,
+  o: {
+    email: string;
+    displayName?: string | undefined;
+    now: Date;
+    meta: RequestMeta;
+    method: "passkey" | "google";
+    /** Rows that must exist before the event (the passkey, the linked identity). */
+    beforeEvents?: (userId: string) => Promise<unknown>;
+  },
+): Promise<{ userId: string; accountId: string }> {
+  const userId = uuidv7();
+  const accountId = uuidv7();
+  await tx
+    .insertInto("users")
+    .values({ id: userId, email: o.email, email_verified_at: o.now, last_login_at: o.now })
+    .execute();
+  const account = await tx
+    .insertInto("accounts")
+    .values({
+      id: accountId,
+      display_name: o.displayName ?? o.email.split("@")[0]?.slice(0, 100) ?? "My business",
+      fee_schedule_id: DEFAULT_FEE_SCHEDULE,
+      api_version: API_VERSION,
+      settings: JSON.stringify(DEFAULT_SETTINGS),
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow();
+  await tx.insertInto("memberships").values({ account_id: accountId, user_id: userId, role: "owner" }).execute();
+  await o.beforeEvents?.(userId);
+  const view = accountView(account);
+  await emitEvent(tx, {
+    subject: "evt.identity.account.created",
+    aggregate: { type: "account", id: view.id, version: account.version },
+    accountUuid: accountId,
+    livemode: null,
+    object: view,
+  });
+  await audit(id, tx, {
+    accountUuid: accountId,
+    actor: { type: "user", id: fromUuid("usr", userId), ip: o.meta.ip },
+    action: "account.created",
+    target: { type: "account", id: view.id },
+    ...(o.method === "google" ? { details: { method: "google" } } : {}),
+  });
+  return { userId, accountId };
 }
 
 type PasskeyRow = (userId: string) => {
@@ -657,7 +788,14 @@ async function recover(id: Identity, tx: Tx, reg: RegistrationRow, passkey: Pass
   });
   const m = await landingAccount(tx, userId);
   if (!m) throw failed("the user has no account");
-  const s = await createSession(id, tx, { kind: "dashboard", userId, accountId: m.account_id, meta, steppedUp: false });
+  const s = await createSession(id, tx, {
+    kind: "dashboard",
+    userId,
+    accountId: m.account_id,
+    meta,
+    steppedUp: false,
+    authMethod: "recovery",
+  });
   id.log.warn({ user: fromUuid("usr", userId), accounts: managed.length }, "account recovery completed");
   return { body: await sessionBody(tx, userId, m.account_id, s), cookie: cookieFor("dashboard", s) };
 }
@@ -762,6 +900,7 @@ export async function authenticationVerify(
         accountUuid: m.account_id,
         actor: { type: "user", id: fromUuid("usr", userId), ip: meta.ip },
         action: "login",
+        details: { method: "passkey" },
       });
       return { body: await sessionBody(tx, userId, m.account_id, s), session: s };
     });
@@ -776,6 +915,9 @@ export async function stepUpOptions(id: Identity, principal: { sub: string }, me
   const userUuid = toUuid(principal.sub, "usr");
   const s = await currentSession(id, meta, userUuid);
   const keys = await userPasskeys(id, userUuid);
+  // ADR-0026: step-ups are passkey assertions only; a Google-only user adds a passkey first
+  if (keys.length === 0)
+    throw new ApiError("passkey_required", { params: { reason: "sensitive actions are confirmed with a passkey." } });
   const options = await generateAuthenticationOptions({
     rpID: id.webauthn.rpId,
     userVerification: "required",
@@ -831,6 +973,7 @@ export {
   challengeOf,
   createSession,
   failed,
+  landingAccount,
   matchesHash,
   storeChallenge,
   takeChallenge,

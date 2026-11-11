@@ -74,8 +74,8 @@ describe("routes and events", () => {
     }
   });
 
-  it("is built against spec 0.4.0; Stage 1 routes keep their shape", () => {
-    expect(SPEC_VERSION).toBe("0.5.0"); // public package renamed to @nearpay-money/spec (0.5.0 = 0.4.2 contracts)
+  it("is built against spec 0.5.1; Stage 1 routes keep their shape", () => {
+    expect(SPEC_VERSION).toBe("0.5.1"); // 0.5.0 = 0.4.2 contracts renamed; 0.5.1 adds Continue with Google (ADR-0026)
     const bound = identityRoutes({} as never, { touches: {} as never, serviceClients: new Map() }).map(
       (b) => b.route.id,
     );
@@ -144,7 +144,7 @@ describe("routes and events", () => {
 
   it("emits every subject identity produces", () => {
     const produced = (Object.keys(SUBJECTS) as Subject[]).filter(
-      (k) => SUBJECTS[k].producer === "identity" && SUBJECTS[k].stage <= 3,
+      (k) => SUBJECTS[k].producer === "identity" && SUBJECTS[k].stage <= 4,
     );
     const files = (dir: string): string[] =>
       readdirSync(dir).flatMap((f) => (statSync(join(dir, f)).isDirectory() ? files(join(dir, f)) : [join(dir, f)]));
@@ -155,6 +155,9 @@ describe("routes and events", () => {
     // settlement_destination.<event> is built from the event name (app/destinations.ts)
     for (const e of ["created", "pending_approval", "cooling_off", "activated", "disabled", "default_changed"])
       literal.add(`evt.identity.settlement_destination.${e}`);
+    // user.google_(un)linked is built from the change name (app/google.ts, ADR-0026)
+    if (src.includes(["`evt.identity.user.", "$", "{change}`"].join("")))
+      for (const e of ["google_linked", "google_unlinked"]) literal.add(`evt.identity.user.${e}`);
     expect([...literal].filter((x) => produced.includes(x as Subject)).sort()).toEqual([...produced].sort());
   });
 });

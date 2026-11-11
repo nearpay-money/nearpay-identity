@@ -7,6 +7,7 @@ import type { Logger, ServiceMetrics } from "@nearpay-internal/service";
 import type { Subject } from "@nearpay-internal/spec";
 import type { ClientIpRule } from "../domain/client-ip.js";
 import type { AuthzCache } from "../infra/cache.js";
+import type { GoogleOidc } from "../infra/clients/google.js";
 import type { Peers } from "../infra/clients/peers.js";
 import type { TurnstileVerifier } from "../infra/clients/turnstile.js";
 import type { OwnershipLookups } from "../infra/crypto/attestation.js";
@@ -118,6 +119,8 @@ export interface Identity {
   readonly lookups: OwnershipLookups;
   readonly turnstile: TurnstileVerifier;
   readonly cache: AuthzCache;
+  /** Continue with Google (ADR-0026); null/absent = off (no client id or secret configured). */
+  readonly google?: GoogleOidc | null;
   readonly now: () => number;
 }
 
