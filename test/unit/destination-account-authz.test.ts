@@ -27,12 +27,17 @@ import {
 
 describe("destination state machine", () => {
   it("every transition of the table", () => {
-    expect(transition("pending_verification", "attest")).toEqual({ ok: true, to: "cooling_off" });
-    expect(transition("pending_verification", "attest", { approvalsRequired: 2 })).toEqual({
-      ok: true,
-      to: "pending_approval",
-    });
-    expect(transition("pending_approval", "approve")).toEqual({ ok: true, to: "cooling_off" });
+    // no cool-off (the default, owner decision 2026-11-11): attested / approved → active at once
+    expect(transition("pending_verification", "attest")).toEqual({ ok: true, to: "active" });
+    expect(transition("pending_approval", "approve")).toEqual({ ok: true, to: "active" });
+    // an explicit cool-off > 0 keeps the cooling_off step
+    expect(transition("pending_verification", "attest", { cooloff: true })).toEqual({ ok: true, to: "cooling_off" });
+    expect(transition("pending_approval", "approve", { cooloff: true })).toEqual({ ok: true, to: "cooling_off" });
+    for (const cooloff of [false, true])
+      expect(transition("pending_verification", "attest", { approvalsRequired: 2, cooloff })).toEqual({
+        ok: true,
+        to: "pending_approval",
+      });
     expect(transition("cooling_off", "activate")).toEqual({ ok: true, to: "active" });
     // audit fix: activation re-checks approvals; pending destinations expire
     expect(transition("cooling_off", "require_approval")).toEqual({ ok: true, to: "pending_approval" });

@@ -128,7 +128,11 @@ export function evaluate(
 
 export const isExpired = (createdAt: number, now: number) => now >= createdAt + PENDING_DESTINATION_TTL_MS;
 
-/** Where a successful attestation moves the destination. */
+/**
+ * Where a successful attestation moves the destination. `cooling_off` here means "approvals complete":
+ * without a cool-off (the default, owner decision 2026-11-11) the app activates it in the same request
+ * (transition `attest` with `cooloff: false` → `active`); the same holds for `decide`.
+ */
 export function afterAttestation(
   ctx: ApprovalContext,
   stored: number,

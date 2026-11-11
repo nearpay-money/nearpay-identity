@@ -1,7 +1,7 @@
 /**
  * Settlement destinations end to end (lld/identity.md §5, §8.2, §9) with the worker running:
- * creation, attestation (NEP-413 / EIP-191), cool-off activation, defaults, disable, live mode,
- * and the compliance consumers.
+ * creation, attestation (NEP-413 / EIP-191) and activation in the same request (no cool-off, owner
+ * decision 2026-11-11), defaults, disable, live mode, and the compliance consumers.
  */
 import { connect } from "@nats-io/transport-node";
 import { sql } from "@nearpay-internal/db";
@@ -12,7 +12,7 @@ import { SettlementDestination } from "@nearpay-money/spec";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { evmSigner, nearSigner } from "../support/signers.js";
 import { eventually, type Stack, startStack, USDC_BASE, USDC_NEAR } from "../support/stack.js";
-import { as, signUp, stepUp, type User } from "../support/users.js";
+import { as, joinByInvite, signUp, stepUp, type User } from "../support/users.js";
 
 let s: Stack;
 let u: User;
@@ -193,7 +193,7 @@ describe("test mode", () => {
 });
 
 describe("live mode", () => {
-  it("NEP-413 (implicit account): challenge → attest → cooling_off → activated by the worker", async () => {
+  it("NEP-413 (implicit account): challenge → attest → active in the same request (no cool-off)", async () => {
     const near = nearSigner();
     const r = await create(
       { asset_id: USDC_NEAR, type: "intents_account", chain: "near:mainnet", address: near.implicitAccount },
@@ -240,15 +240,41 @@ describe("live mode", () => {
       as(u, "live", { challenge_id: c.id, standard: "nep413", signature: sig, public_key: near.publicKey }),
     );
     expect(ok.status).toBe(200);
-    expect(ok.body.status).toBe("cooling_off");
+    // active at once: the first live destination is the default, and live payments to it are possible
+    expect(ok.body).toMatchObject({ status: "active", is_default: true });
+    expect(new Date(ok.body.active_at * 1000).getTime()).toBeLessThanOrEqual(Date.now() + 5_000);
     const replay = await s.gateway(
       "POST",
       `/v1/settlement_destinations/${r.body.id}/attest`,
       as(u, "live", { challenge_id: c.id, standard: "nep413", signature: sig, public_key: near.publicKey }),
     );
     expect(replay.status).toBe(409);
-    await eventually(async () => (await status(r.body.id, "live")).status === "active");
-    expect(await outbox(r.body.id)).toEqual(["created", "cooling_off", "activated", "default_changed"]);
+    expect((await status(r.body.id, "live")).status).toBe("active");
+    // no cooling_off event (no "cool-off started" notice); one activation for consumers
+    expect(await outbox(r.body.id)).toEqual(["created", "activated", "default_changed"]);
+    expect(
+      (
+        await s.admin.db
+          .selectFrom("settlement_destination_transitions")
+          .select(["from_state", "to_state", "cause"])
+          .where("destination_id", "=", toUuid(r.body.id, "sd"))
+          .orderBy("created_at")
+          .execute()
+      ).map((t) => [t.from_state, t.to_state, t.cause]),
+    ).toEqual([
+      [null, "pending_verification", "created"],
+      ["pending_verification", "active", "attested"],
+    ]);
+    // no activation job is left behind
+    expect(
+      (
+        await sql<{
+          n: number;
+        }>`select count(*)::int as n from jobs where dedupe_key = ${`destination.activate:sd:${toUuid(r.body.id, "sd")}`}`.execute(
+          s.admin.db,
+        )
+      ).rows[0]?.n,
+    ).toBe(0);
     const row = await s.admin.db
       .selectFrom("settlement_destinations")
       .selectAll()
@@ -259,7 +285,7 @@ describe("live mode", () => {
       token: await mintServiceToken("payments"),
     });
     expect(internal.body.attestation_hash).toMatch(/^[0-9a-f]{64}$/);
-    // re-screened at activation
+    // screened again at the attestation that activated it
     expect(
       s.compliance
         .callsTo(createScreening)
@@ -280,7 +306,7 @@ describe("live mode", () => {
       `/v1/settlement_destinations/${r.body.id}/attest`,
       as(u, "live", { challenge_id: c.id, standard: "eip191", signature: evm.sign(c.message) }),
     );
-    expect(ok.body.status).toBe("cooling_off");
+    expect(ok.body.status).toBe("active");
 
     const near = nearSigner();
     const named = await create(
@@ -301,7 +327,7 @@ describe("live mode", () => {
     s.nearKeys.set(`payouts.acme.near|${near.publicKey}`, "FullAccess");
     expect(
       (await s.gateway("POST", `/v1/settlement_destinations/${named.body.id}/attest`, as(u, "live", body))).body.status,
-    ).toBe("cooling_off");
+    ).toBe("active");
   });
 
   it("an expired challenge cannot be used", async () => {
@@ -468,7 +494,7 @@ describe("re-issued attestation challenges (POST /v1/settlement_destinations/{id
     }
     const ok = await attest(r.body.id, near, c3);
     expect(ok.status).toBe(200);
-    expect(ok.body.status).toBe("cooling_off");
+    expect(ok.body.status).toBe("active");
     const after = await rows();
     expect(after.map((x) => [x.used_at !== null, x.superseded_at !== null])).toEqual([
       [false, true],
@@ -476,7 +502,7 @@ describe("re-issued attestation challenges (POST /v1/settlement_destinations/{id
       [true, false],
     ]);
     // no state change → no outbox event; each issue is audited
-    expect((await outbox(r.body.id)).slice(0, 2)).toEqual(["created", "cooling_off"]);
+    expect((await outbox(r.body.id)).slice(0, 2)).toEqual(["created", "activated"]);
     const audits = await s.admin.db
       .selectFrom("audit_events")
       .selectAll()
@@ -503,7 +529,7 @@ describe("re-issued attestation challenges (POST /v1/settlement_destinations/{id
       `/v1/settlement_destinations/${r.body.id}/attest`,
       as(u, "live", { challenge_id: c.id, standard: "eip191", signature: evm.sign(c.message) }),
     );
-    expect(ok.body.status).toBe("cooling_off");
+    expect(ok.body.status).toBe("active");
     // test-mode destinations are active at once; disabled ones are final
     const t = await create({
       asset_id: USDC_NEAR,
@@ -662,8 +688,86 @@ describe("compliance consumers", () => {
   });
 });
 
+describe("two approvers without a cool-off", () => {
+  async function team(tag: string) {
+    const a = await signUp(s, `a-${tag}@instant.test`, `Instant ${tag}`);
+    const b = await joinByInvite(s, a, `b-${tag}@instant.test`, "admin");
+    // a long-standing team: both grants predate the destination and are past their tenure
+    await sql`update manager_grants set granted_at = granted_at - interval '60 days',
+        qualifies_at = qualifies_at - interval '60 days'
+      where account_id = ${toUuid(a.accountId, "acct")}`.execute(s.admin.db);
+    const near = nearSigner();
+    await stepUp(s, a);
+    const r = await create(
+      { asset_id: USDC_NEAR, type: "intents_account", chain: "near:mainnet", address: near.implicitAccount },
+      "live",
+      a,
+    );
+    const c = r.body.attestation_challenge;
+    const att = await s.gateway(
+      "POST",
+      `/v1/settlement_destinations/${r.body.id}/attest`,
+      as(a, "live", {
+        challenge_id: c.id,
+        standard: "nep413",
+        signature: near.sign(c.message, Buffer.from(c.nonce, "base64")),
+        public_key: near.publicKey,
+      }),
+    );
+    await stepUp(s, b);
+    return { a, b, id: r.body.id as string, att, address: near.implicitAccount };
+  }
+  const approve = (who: User, id: string) =>
+    s.gateway("POST", `/v1/settlement_destinations/${id}/approve`, as(who, "live", { decision: "approve" }));
+  const screeningsOf = (address: string) =>
+    s.compliance.callsTo(createScreening).filter((x) => (x.body as { subject: string }).subject === address).length;
+
+  it("attestation waits for the second approver (not screened again yet); the final approval activates it at once", async () => {
+    const { b, id, att, address } = await team("ok");
+    expect(att.body).toMatchObject({ status: "pending_approval", active_at: null });
+    expect(screeningsOf(address)).toBe(1); // creation only
+    const ok = await approve(b, id);
+    expect(ok.status).toBe(200);
+    expect(ok.body).toMatchObject({ status: "active", is_default: true, approval: { required: 2 } });
+    expect(screeningsOf(address)).toBe(2); // screened again by the approval that activated it
+    expect(await outbox(id)).toEqual(["created", "pending_approval", "activated", "default_changed"]);
+  });
+
+  it("a block at the final approval's screening disables it (compliance)", async () => {
+    const { b, id, address } = await team("block");
+    s.compliance.on(createScreening, async (ctx) => ({
+      screening_id: newId("scr"),
+      decision: ((ctx.body as { subject: string }).subject === address ? "block" : "allow") as "allow" | "block",
+      risk: null,
+      reasons: ["sanctions"],
+      cached: false,
+      post_screen_required: false,
+    }));
+    const r = await approve(b, id);
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ status: "disabled", disabled_reason: "compliance" });
+    expect(await outbox(id)).toEqual(["created", "pending_approval", "disabled"]);
+  });
+});
+
 describe("activation", () => {
-  it("a block at the activation re-screen disables the destination instead", async () => {
+  const attestNear = async (
+    near: ReturnType<typeof nearSigner>,
+    id: string,
+    c: { id: string; message: string; nonce: string },
+  ) =>
+    s.gateway(
+      "POST",
+      `/v1/settlement_destinations/${id}/attest`,
+      as(u, "live", {
+        challenge_id: c.id,
+        standard: "nep413",
+        signature: near.sign(c.message, Buffer.from(c.nonce, "base64")),
+        public_key: near.publicKey,
+      }),
+    );
+
+  it("a block at the attestation screening disables the destination at once (compliance)", async () => {
     let calls = 0;
     s.compliance.on(createScreening, async () => ({
       screening_id: newId("scr"),
@@ -678,20 +782,28 @@ describe("activation", () => {
       { asset_id: USDC_NEAR, type: "intents_account", chain: "near:mainnet", address: near.implicitAccount },
       "live",
     );
-    const c = r.body.attestation_challenge;
-    await s.gateway(
-      "POST",
-      `/v1/settlement_destinations/${r.body.id}/attest`,
-      as(u, "live", {
-        challenge_id: c.id,
-        standard: "nep413",
-        signature: near.sign(c.message, Buffer.from(c.nonce, "base64")),
-        public_key: near.publicKey,
-      }),
+    const ok = await attestNear(near, r.body.id, r.body.attestation_challenge);
+    expect(ok.status).toBe(200);
+    expect(ok.body).toMatchObject({ status: "disabled", disabled_reason: "compliance", is_default: false });
+    expect(calls).toBe(2);
+    expect(await outbox(r.body.id)).toEqual(["created", "disabled"]);
+  });
+
+  it("screening unavailable at the attestation: 503, nothing changes, the same signature succeeds on retry", async () => {
+    const near = nearSigner();
+    const r = await create(
+      { asset_id: USDC_NEAR, type: "intents_account", chain: "near:mainnet", address: near.implicitAccount },
+      "live",
     );
-    await eventually(async () => (await status(r.body.id, "live")).status === "disabled");
-    expect((await status(r.body.id, "live")).disabled_reason).toBe("compliance");
-    expect(await outbox(r.body.id)).toEqual(["created", "cooling_off", "disabled"]);
+    s.compliance.on(createScreening, async () => mockError("api_error"));
+    const down = await attestNear(near, r.body.id, r.body.attestation_challenge);
+    expect(down.status).toBe(503);
+    expect(down.body).toMatchObject({ error: { code: "screening_unavailable" } });
+    expect((await status(r.body.id, "live")).status).toBe("pending_verification");
+    expect(await outbox(r.body.id)).toEqual(["created"]);
+    s.resetMocks();
+    const ok = await attestNear(near, r.body.id, r.body.attestation_challenge);
+    expect(ok.body.status).toBe("active");
   });
 
   it("purges expired auth material", async () => {

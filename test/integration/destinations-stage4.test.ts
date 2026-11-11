@@ -1,6 +1,6 @@
 /**
  * Stage 4 settlement destinations on Solana and Bitcoin end to end (lld/identity.md §20) with the worker:
- * live creation and challenge, `standard: solana` / `standard: bip322` attestation → cooling_off → active,
+ * live creation and challenge, `standard: solana` / `standard: bip322` attestation → active (no cool-off),
  * P2WPKH/P2TR-only Bitcoin destinations, off-curve Solana addresses, the stored attestation.
  * Attestations go through the gateway and the spec 0.4.0 `attestSettlementDestination` route.
  */
@@ -11,7 +11,7 @@ import { getInternalAsset } from "@nearpay-internal/spec";
 import { BITCOIN_MAINNET, type DESTINATION_SIGNING_STANDARDS, SOLANA_MAINNET } from "@nearpay-money/spec";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { bip322Signer, solanaSigner } from "../support/signers.js";
-import { eventually, type Stack, startStack } from "../support/stack.js";
+import { type Stack, startStack } from "../support/stack.js";
 import { as, signUp, type User } from "../support/users.js";
 
 const SOL = "nep141:sol.omft.near";
@@ -61,7 +61,7 @@ async function attestHttp(
 }
 
 describe("Solana (standard: solana)", () => {
-  it("live: challenge → raw-message ed25519 signature → cooling_off → active; attestation stored", async () => {
+  it("live: challenge → raw-message ed25519 signature → active at once; attestation stored", async () => {
     const w = solanaSigner();
     const r = await create({ asset_id: USDC_SOL, chain: SOLANA_MAINNET, address: w.address });
     expect(r.status).toBe(201);
@@ -83,8 +83,8 @@ describe("Solana (standard: solana)", () => {
     }
     const ok = await attestHttp(r.body.id, { challenge_id: c.id, standard: "solana", signature: w.sign(c.message) });
     expect(ok.status).toBe(200);
-    expect(ok.body).toMatchObject({ status: "cooling_off" });
-    await eventually(async () => (await status(r.body.id)).status === "active");
+    expect(ok.body).toMatchObject({ status: "active" });
+    expect((await status(r.body.id)).status).toBe("active");
     const row = await s.admin.db
       .selectFrom("settlement_destinations")
       .selectAll()
@@ -126,7 +126,7 @@ describe("Solana (standard: solana)", () => {
 
 describe("Bitcoin (standard: bip322)", () => {
   for (const type of ["p2wpkh", "p2tr"] as const)
-    it(`live ${type}: BIP-322 simple → cooling_off → active`, async () => {
+    it(`live ${type}: BIP-322 simple → active at once`, async () => {
       const k = bip322Signer(type);
       const r = await create({ asset_id: BTC, chain: BITCOIN_MAINNET, address: k.address });
       expect(r.status).toBe(201);
@@ -143,8 +143,8 @@ describe("Bitcoin (standard: bip322)", () => {
         standard: "bip322",
         signature: k.sign(c.message),
       });
-      expect(ok.body).toMatchObject({ status: "cooling_off" });
-      await eventually(async () => (await status(r.body.id)).status === "active");
+      expect(ok.body).toMatchObject({ status: "active" });
+      expect((await status(r.body.id)).status).toBe("active");
       const row = await s.admin.db
         .selectFrom("settlement_destinations")
         .select("attestation")
@@ -167,7 +167,7 @@ describe("Bitcoin (standard: bip322)", () => {
       .executeTakeFirstOrThrow();
     expect(row.address_norm).toBe(k.address);
     const ok = await attestHttp(r.body.id, { challenge_id: c.id, standard: "bip322", signature: k.sign(c.message) });
-    expect(ok.body).toMatchObject({ status: "cooling_off" });
+    expect(ok.body).toMatchObject({ status: "active" });
   });
 
   for (const mode of ["live", "test"] as const)
