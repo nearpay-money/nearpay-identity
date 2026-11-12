@@ -66,13 +66,13 @@ Needs Node 22 (`.nvmrc`) and pnpm 9. `.npmrc` points the `@nearpay-money` and `@
 
 ## Commands
 
-| Command | What it does |
-| --- | --- |
-| `pnpm install --frozen-lockfile` | Install; NearPay packages come from the local registry (see "Verify this repo") |
-| `pnpm test` | Unit and property tests |
-| `pnpm test:integration` | Integration and contract tests on real Postgres, Valkey and NATS (Testcontainers; needs Docker) |
-| `pnpm verify` | typecheck + lint + unit tests with the coverage gate + integration tests + build |
-| `docker build --network host --build-arg NP_REGISTRY_URL=http://127.0.0.1:4873 -t nearpay/identity:local .` | Image (what nearpay-deploy's `scripts/up.sh` runs) |
+| Command                                                                                                     | What it does                                                                                    |
+| ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `pnpm install --frozen-lockfile`                                                                            | Install; NearPay packages come from the local registry (see "Verify this repo")                 |
+| `pnpm test`                                                                                                 | Unit and property tests                                                                         |
+| `pnpm test:integration`                                                                                     | Integration and contract tests on real Postgres, Valkey and NATS (Testcontainers; needs Docker) |
+| `pnpm verify`                                                                                               | typecheck + lint + unit tests with the coverage gate + integration tests + build                |
+| `docker build --network host --build-arg NP_REGISTRY_URL=http://127.0.0.1:4873 -t nearpay/identity:local .` | Image (what nearpay-deploy's `scripts/up.sh` runs)                                              |
 
 ## Configuration
 
