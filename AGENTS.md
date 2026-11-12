@@ -1,7 +1,7 @@
 # AGENTS.md — nearpay-identity
 
-You are working in **nearpay-identity**, one of 27 NearPay repositories (`nearpay-brain/architecture/repositories.md`).
-Scope: Accounts, users, roles, passkey sessions, API keys, settlement destinations with attestation and cool-off, gateway authorisation.
+You are working in **nearpay-identity**, one of 26 NearPay repositories (`nearpay-brain/architecture/repositories.md`).
+Scope: Accounts, users, roles, passkey sessions, API keys, settlement destinations with attestation (no cool-off by default, ADR-0027), gateway authorisation.
 
 ## Before changing anything
 

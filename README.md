@@ -1,6 +1,11 @@
 # nearpay-identity
 
-> Accounts, users, roles, passkey sessions, API keys, settlement destinations with attestation and cool-off, gateway authorisation.
+Accounts, users, roles, sign-in (passkeys and "Continue with Google"), sessions, API keys, payout wallets (settlement destinations) with ownership attestation, and the gateway's authorisation check.
+
+Part of [NearPay](https://github.com/nearpay-money/nearpay) — start there for the live demo, the architecture diagram and the full "do X, see Y" walkthrough.
+
+- **Where it sits:** the gateway asks it to authorise every API request (`/internal/authz`) and routes `/v1/account`, `/v1/auth`, `/v1/settlement_destinations` and `/v1/api_keys` to it; every service fetches its service token and the JWKS here; payments reads the settlement context; sentinel reads the destination registry read-only. It calls compliance (screening), rails (asset and chain checks) and notify (mail).
+- **Status:** NearPay runs on NEAR mainnet as a closed beta (https://nearpay.money). This service is part of that deployment. A payout wallet is active as soon as its ownership signature verifies: no cool-off (ADR-0027).
 
 |                                       |                                                                                                               |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -13,16 +18,16 @@
 
 ## Documentation
 
-This repo stays surgical: design docs live in [`nearpay-brain`](../nearpay-brain/README.md), not here.
+Design docs live in [`nearpay-brain`](https://github.com/nearpay-money/nearpay-brain), not here.
 
-- `nearpay-brain/lld/identity.md` — **low-level design (dev-ready; implement from this)**
-- `nearpay-brain/lld/audits/identity.md` — audit findings already folded into the LLD
-- `nearpay-brain/roadmap/development-plan.md` — stage and step this repo is built in
-- `nearpay-brain/architecture/hld.md` — system design
-- `nearpay-brain/architecture/repositories.md` — repo topology and dependency rules
-- `nearpay-brain/decisions/ADR-0005-settlement-destinations.md`
-- `nearpay-brain/decisions/ADR-0014-auth-gateway.md`
-- `nearpay-brain/architecture/security.md`
+- [`lld/identity.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/lld/identity.md) — low-level design this repo is implemented from
+- [`lld/audits/identity.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/lld/audits/identity.md) — audit findings already folded into the LLD
+- [`roadmap/development-plan.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/roadmap/development-plan.md) — stage and step this repo is built in
+- [`architecture/hld.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/architecture/hld.md) — system design
+- [`architecture/repositories.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/architecture/repositories.md) — repo topology and dependency rules
+- [`decisions/ADR-0005-settlement-destinations.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/decisions/ADR-0005-settlement-destinations.md)
+- [`decisions/ADR-0014-auth-gateway.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/decisions/ADR-0014-auth-gateway.md)
+- [`architecture/security.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/architecture/security.md)
 
 ## Layout
 
@@ -48,15 +53,26 @@ nearpay-identity/
 └── Dockerfile                distroless Node 22 image, `node dist/main.js <process>`
 ```
 
+## Verify this repo
+
+Needs Node 22 (`.nvmrc`) and pnpm 9. `.npmrc` points the `@nearpay-money` and `@nearpay-internal` scopes at a local package registry, so start that first.
+
+1. Start the local registry (no Docker, Node 22 only):
+   `git clone https://github.com/nearpay-money/nearpay-deploy ../nearpay-deploy && ../nearpay-deploy/scripts/registry.sh start`
+   → `curl http://127.0.0.1:4873/-/ping` answers `{}`.
+2. `pnpm install --frozen-lockfile` → ends with `Done in …`, no registry errors.
+3. `pnpm test` (unit and property tests; no Docker) → `Test Files  14 passed (14)`, `Tests  203 passed (203)`.
+4. `pnpm verify` (the full gate: typecheck, lint, unit tests with the coverage gate of ≥ 90 % branches on `src/domain`, integration tests, build) → exits 0. The integration step starts Postgres, Valkey and NATS with Testcontainers and drives the service through a simulated gateway with a software passkey, so it needs a running Docker daemon; steps 1–3 do not.
+
 ## Commands
 
-| Command                                                                                                     | What it does                                                                                                                                              |
-| ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm install`                                                                                              | Install (Node 22, pnpm 9); `@nearpay-money/*` and `@nearpay-internal/*` come from the local registry (`.npmrc`, `nearpay-deploy/scripts/up.sh` starts it) |
-| `pnpm test`                                                                                                 | Unit and property tests                                                                                                                                   |
-| `pnpm test:integration`                                                                                     | Integration and contract tests on real Postgres, Valkey and NATS (Testcontainers; needs Docker)                                                           |
-| `pnpm verify`                                                                                               | typecheck + lint + unit tests with the coverage gate + integration tests + build                                                                          |
-| `docker build --network host --build-arg NP_REGISTRY_URL=http://127.0.0.1:4873 -t nearpay/identity:local .` | Image (what `up.sh` runs)                                                                                                                                 |
+| Command | What it does |
+| --- | --- |
+| `pnpm install --frozen-lockfile` | Install; NearPay packages come from the local registry (see "Verify this repo") |
+| `pnpm test` | Unit and property tests |
+| `pnpm test:integration` | Integration and contract tests on real Postgres, Valkey and NATS (Testcontainers; needs Docker) |
+| `pnpm verify` | typecheck + lint + unit tests with the coverage gate + integration tests + build |
+| `docker build --network host --build-arg NP_REGISTRY_URL=http://127.0.0.1:4873 -t nearpay/identity:local .` | Image (what nearpay-deploy's `scripts/up.sh` runs) |
 
 ## Configuration
 
@@ -88,32 +104,40 @@ nearpay-identity/
 ## Behaviour
 
 - **Sign-up and sessions:** sign-up (Turnstile; while siteverify is down, sign-up and recovery go on under a stricter per-IP limit, `NP_TURNSTILE_OUTAGE_LIMIT` per 10 minutes, logged as `ALERT turnstile_unavailable` and counted in `nearpay_identity_turnstile_outage_total{result}`) emails a single-use magic link (15 min; up to 5 per address per hour; an existing address gets the same 202 and no mail). The link yields a 5-minute registration token; registering a discoverable passkey (user verification required, ES256/EdDSA/RS256) creates the user, the account (owner) and a session, and emits `account.created`. Sign-in is a passkey assertion without an email (no enumeration). Sessions: `__Host-np_session`, 12 h sliding / 7 days absolute, CSRF token for unsafe requests; signing in counts as a step-up; step-up (`/v1/auth/step_up/*`) is fresh for 10 minutes. `GET /v1/auth/session` (any role, sets no cookie) returns the current `DashboardSession` so a reload or a new tab recovers it: the CSRF token is the session's own, re-issued from its encrypted copy, never rotated; a cookie that is not a valid dashboard session of the request's user and account is `401`.
+- **Continue with Google (ADR-0026):** optional (on only when `NP_GOOGLE_CLIENT_ID` and `NP_GOOGLE_CLIENT_SECRET_FILE` are set; the dashboard hides the button otherwise). OpenID Connect code flow with PKCE, `state` and `nonce`, run here; single use, 10 minutes, bound to the browser's flow cookie. A Google login is keyed on the Google `sub`; a new verified email creates a user and an account like sign-up; an email that already has a user is refused, never linked automatically. Google sessions carry no step-up: sensitive actions still need a passkey, and a Google-only user can add a first passkey within 10 minutes of signing in.
 - **Gateway (`/internal/authz`):** API key (SHA-256 lookup through LRU 30 s → Valkey 60 s → Postgres; revoked/expired → 401; IP allowlist; publishable keys only on publishable routes) or session (CSRF on unsafe methods; `NearPay-Mode` picks test/live; console sessions on `ops.` hosts mint `ptype ops`) or anonymous on open routes. Suspended accounts cannot write in live mode; live writes on the routes that declare `account_not_live` need `live_enabled`. Token buckets: live 100/s (burst 200), test 25/50, anonymous 10/20 per IP. Mints the 60 s request token with `role` and `step_up_until`.
 - **API keys:** created and rolled from a stepped-up session, shown once; revocation purges Valkey and every replica's LRU (`ctl.identity.cache.purge`).
 - **Destinations:** test mode is active at once (`verification: test`). Live: address/chain/asset/memo checks against rails, screening (fail closed), one live signature-verified row per (chain, address, asset) across accounts, then an attestation challenge (`nep413` with nonce/recipient, `eip191`, `solana` — base58 ed25519 over the raw message — or `bip322` — BIP-322 simple, base64, P2WPKH/P2TR only; 10 minutes, single use). A valid attestation (or the last required approval) screens the address again and makes the destination `active` in the same request — no cool-off by default (owner decision 2026-11-11); a block disables it. Only with `NP_COOLOFF_SECONDS` > 0 does it go through `cooling_off` and the activation job (re-screen; a block disables). While a destination is `pending_verification`, `POST /v1/settlement_destinations/{id}/challenge` (stepped-up owner/admin session, idempotent) issues a fresh challenge in the same shape and supersedes the earlier unused ones (`superseded_at`; `…/attest` answers `challenge_expired` for them); any other status is `409 state_conflict`. The first active destination per asset becomes the default. Every change writes the row, a transition and the outbox event in one transaction.
-- **Live mode:** `live_enabled = KYB approved ∧ active live destination ∧ account active`, recomputed on every change (`account.updated`); compliance events are applied in aggregate-version order.
+- **Live mode:** `live_enabled = KYB approved ∧ active live destination ∧ account active`, recomputed on every change (`account.updated`); compliance events are applied in aggregate-version order. Under open onboarding (ADR-0024) compliance approves complete self-declared business details at once, so there is no business review to wait for.
 - **Internal:** JWKS, client-credentials service tokens, settlement context (account, fee schedule, active destinations, defaults, `context_version`), any destination, notification recipients.
 
 - **Stage 2 — team:** members (`/v1/account/members`), invitations (7-day links via notify `team.invitation`; new users join through the link, existing users sign in and `POST /v1/auth/invitations/accept`), only owners manage owners, `409 last_owner`, removal revokes the member's sessions; `evt.identity.member.*` (ids only). Sessions switch accounts (`/v1/auth/accounts`, `/v1/auth/session/account`); sign-in lands on the most recently used account.
 - **Console two-person claims:** every console token carries `ops_admins` (active `ops_admin` operators) and `ops_auth_at` (last user verification); compliance and sentinel require a second operator only while `ops_admins ≥ 2` (adaptive rule; `operator-list` shows the mode).
 - **Stage 2 — two-approver rule:** live destinations of accounts with ≥ 2 owners/admins need a second, different owner/admin (`POST /v1/settlement_destinations/{id}/approve`, `403 approver_conflict`) before it activates; enforced in the domain, by the `destination_approvals` primary key (the creator's creation is an approval row) and by the `destination_approvals_complete` trigger.
 - **Stage 2 — restricted keys:** `rk_…` with catalogue scopes (write implies read, expanded and checked at the gateway); `PATCH /v1/api_keys/{id}` purges the caches. **Recovery:** `POST /v1/auth/recovery` → link → new passkey on the existing user; `recovered_at` on every account the user owns or administers (destination creation and approval locked 48 h).
-- **Stage 2 — console:** `operator-add` emails a 24 h enrolment link; hardware-key registration on the console host (attestation `direct`, AAGUID allow-list, device-bound) → `__Host-np_ops` (30 min idle / 12 h); ops tokens carry `ops_role` and the role's scopes; the console host routes only `/ops/*`. Merchant search/detail and the platform audit log (identity rows plus `evt.{compliance,sentinel,payments,rails}.ops_action.recorded`, deduped on the action id). KYB: `kyb.submitted` → `pending`; on `kyb.approved` the self-declared legal name ops approved (read from compliance) becomes `verified_legal_name` — reviewed by NearPay ops, not third-party verified; leaving `approved` clears it.
+- **Stage 2 — console:** `operator-add` emails a 24 h enrolment link; hardware-key registration on the console host (attestation `direct`, AAGUID allow-list, device-bound) → `__Host-np_ops` (30 min idle / 12 h); ops tokens carry `ops_role` and the role's scopes; the console host routes only `/ops/*`. Merchant search/detail and the platform audit log (identity rows plus `evt.{compliance,sentinel,payments,rails}.ops_action.recorded`, deduped on the action id). KYB: `kyb.submitted` → `pending`; on `kyb.approved` the self-declared legal name (read from compliance) becomes `verified_legal_name`. Despite the field name it is self-declared: under open onboarding (ADR-0024) the approval is automatic, and it is never third-party verified; leaving `approved` clears it.
 
 - **Stage 3 — CLI login:** `nearpay login` as an RFC 8628-style device authorization (`POST /v1/cli/logins`, `POST /v1/cli/logins/poll`, anonymous; `GET /v1/cli/logins/{code}` and `…/approve` (step-up) / `…/deny` for owner/admin/developer sessions). Approval mints an ordinary restricted **test** key (`CLI_KEY_SCOPES`, 90 days, audited `api_key.created` with `via: cli_login`); the first poll that sees `approved` receives the secret once. Device codes are stored hashed, IPs and the pending secret envelope-encrypted; polling faster than 5 s is `429` (`slow_down`); uncollected keys are revoked after 15 min (job `cli_logins.expire`).
 
-## Ops CLI (Stage 1)
+## Ops CLI
 
 ```sh
 docker compose exec identity-api /nodejs/bin/node dist/ops.js seed-demo
 ```
 
-`account-show <acct|email>` · `operator-add <email> ops|ops_admin` · `operator-revoke <email>` · `destination-cooloff-skip <sd_…>` (local) · `seed-demo [--email] [--name] [--destination]` (local: demo merchant with test keys and an active test destination).
+`account-show <acct|email>` · `operator-add <email> ops|ops_admin` · `operator-revoke <email>` · `operator-list` · `destination-cooloff-skip <sd_…>` (local; only relevant when `NP_COOLOFF_SECONDS` > 0) · `seed-demo [--email] [--name] [--destination]` (local: demo merchant with test keys and an active test destination).
 
 ## Status
 
 Stages 1–4 implemented against `@nearpay-money/spec` / `@nearpay-internal/spec` 0.4.0 and kit 0.3.1: every identity route (public, internal and console, CLI login) and every subject the catalogue routes to identity (migrations up to 0008), including Solana and BIP-322 destination ownership attestations (LLD §20).
 
+Since then: payout wallets activate at attestation or approval with no cool-off by default (ADR-0027), Continue with Google (ADR-0026, migration `0010_google_sign_in.sql`), sign-up and recovery keep working under a stricter limit while Turnstile is unavailable, and kit 0.6.0. Current pins (`package.json`): `@nearpay-money/spec` 0.5.1, kit packages 0.6.0.
+
 ## Built with
 
-TypeScript 5, Node 22, `@nearpay-internal/*` kit (service, db, bus, http, auth, chains, intents, ids), `@simplewebauthn/server` (WebAuthn), `@noble/curves` + `@noble/hashes` (NEP-413 / EIP-191), `bs58`, `ioredis` (Valkey), `lru-cache`, Kysely + pg, NATS JetStream; tests with Vitest, fast-check, jose and Testcontainers. Code and documentation are written with AI assistance (Claude) under human direction and review.
+- Runtime: TypeScript 5 on Node 22; `@nearpay-internal/*` kit (service, db, bus, http, auth, chains, intents, ids) with Kysely + pg and NATS JetStream underneath; `@simplewebauthn/server` (WebAuthn), `jose` (Google ID tokens, Cloudflare Access), `@noble/curves` + `@noble/hashes` (NEP-413 / EIP-191), `@scure/base` and `@scure/btc-signer` (BIP-322), `bs58`, `ioredis` (Valkey), `lru-cache`, `prom-client`, `zod`.
+- External services: Cloudflare Turnstile, Google OpenID Connect (optional), NEAR and EVM RPCs for attestation lookups.
+- Tests and tooling: Vitest, fast-check, Testcontainers, Biome.
+- Licence: Apache-2.0 (`LICENSE`).
+
+Code and documentation are written with AI assistance (Claude) under human direction and review. Built for the NEAR Hackathon (Nov 2026).
