@@ -46,6 +46,8 @@ export const apiShape = {
   /** `{"clients":[{"client_id","secret_sha256"}]}` (scopes come from the spec). */
   serviceClientsFile: z.string().min(1),
   turnstileSecret: secret(),
+  /** Sign-ups/recoveries per client IP per 10 minutes while Turnstile siteverify is unavailable. */
+  turnstileOutageLimit: z.coerce.number().int().min(1).max(1_000).default(5),
   webauthnRpId: z.string().min(1).default("nearpay.localhost"),
   webauthnOrigins: list(url(["https:", "http:"])),
   dashboardOrigin: url(["https:", "http:"]),

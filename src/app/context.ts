@@ -21,6 +21,8 @@ export interface IdentityMetrics {
   destinationTransition(to: string): void;
   attestationFailure(standard: string): void;
   loginFailure(): void;
+  /** A sign-up/recovery challenge while siteverify was unavailable: let through under the outage limit, or refused. */
+  turnstileOutage(result: "allowed" | "limited"): void;
 }
 
 /** Labels of `nearpay_ops_beta_flag{flag}`. */
@@ -32,6 +34,7 @@ export const noMetrics: IdentityMetrics = {
   destinationTransition() {},
   attestationFailure() {},
   loginFailure() {},
+  turnstileOutage() {},
 };
 
 export function identityMetrics(m: ServiceMetrics): IdentityMetrics {
@@ -45,12 +48,20 @@ export function identityMetrics(m: ServiceMetrics): IdentityMetrics {
   const transitions = m.counter("destination_transitions_total", "Settlement destination transitions.", ["to"]);
   const attest = m.counter("attestation_failures_total", "Rejected destination attestations.", ["standard"]);
   const login = m.counter("login_failures_total", "Failed passkey sign-ins and step-ups.");
+  const outage = m.counter(
+    "turnstile_outage_total",
+    "Sign-up/recovery challenges while Turnstile siteverify was unavailable (allowed under the per-IP outage limit, or limited).",
+    ["result"],
+  );
+  outage.inc({ result: "allowed" }, 0);
+  outage.inc({ result: "limited" }, 0);
   return {
     authz: (result, s) => authz.observe({ result }, s),
     rateLimited: (ptype) => limited.inc({ ptype }),
     destinationTransition: (to) => transitions.inc({ to }),
     attestationFailure: (standard) => attest.inc({ standard }),
     loginFailure: () => login.inc(),
+    turnstileOutage: (result) => outage.inc({ result }),
   };
 }
 
@@ -118,6 +129,8 @@ export interface Identity {
   readonly console: ConsoleConfig;
   readonly lookups: OwnershipLookups;
   readonly turnstile: TurnstileVerifier;
+  /** Sign-ups/recoveries per client IP per 10 minutes while siteverify is unavailable (NP_TURNSTILE_OUTAGE_LIMIT, default 5). */
+  readonly turnstileOutageLimit?: number;
   readonly cache: AuthzCache;
   /** Continue with Google (ADR-0026); null/absent = off (no client id or secret configured). */
   readonly google?: GoogleOidc | null;

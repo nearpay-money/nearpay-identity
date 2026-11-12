@@ -47,6 +47,39 @@ export const REGISTRATION_MS = 5 * 60_000;
 export const CEREMONY_MS = 5 * 60_000;
 /** Magic links per email per hour (beyond: silently not sent; the gateway limits per IP). */
 export const MAGIC_LINKS_PER_HOUR = 5;
+/** Sign-ups/recoveries per client IP per 10 minutes while Turnstile is unavailable (payments' F-12 limit). */
+export const TURNSTILE_OUTAGE_LIMIT = 5;
+const TURNSTILE_OUTAGE_WINDOW_S = 600;
+
+/**
+ * The sign-up/recovery challenge. `failed` refuses. `unavailable` (siteverify down) never skips the check silently:
+ * the request goes on only under a stricter per-IP limit (shared through Valkey, like the gateway's), and is counted
+ * and logged, so onboarding survives a Cloudflare outage without opening sign-up to bots.
+ */
+async function challenge(id: Identity, token: string, meta: RequestMeta, flow: "signup" | "recovery"): Promise<void> {
+  const t = await id.turnstile(token, meta.ip);
+  if (t === "ok") return;
+  if (t === "failed") throw new ApiError("turnstile_failed");
+  const limit = id.turnstileOutageLimit ?? TURNSTILE_OUTAGE_LIMIT;
+  const r = await id.cache.take(
+    `turnstile:outage:${meta.ip ?? "unknown"}`,
+    { rate: limit / TURNSTILE_OUTAGE_WINDOW_S, burst: limit },
+    id.now(),
+  );
+  if (!r.allowed) {
+    id.metrics.turnstileOutage("limited");
+    id.metrics.rateLimited("anonymous");
+    throw new ApiError("rate_limited", {
+      params: { retry_after: String(r.retryAfter) },
+      headers: { "Retry-After": String(r.retryAfter) },
+    });
+  }
+  id.metrics.turnstileOutage("allowed");
+  id.log.warn(
+    { flow },
+    "ALERT turnstile_unavailable: siteverify did not answer; allowed under the per-IP outage limit",
+  );
+}
 export const DEFAULT_FEE_SCHEDULE = "01900000-0000-7000-8000-000000000001";
 
 const failed = (reason: string) => new ApiError("webauthn_failed", { params: { reason } });
@@ -69,7 +102,7 @@ export async function signup(
   b: { email: string; turnstile_token: string },
   meta: RequestMeta,
 ): Promise<void> {
-  if (!(await id.turnstile(b.turnstile_token, meta.ip))) throw new ApiError("turnstile_failed");
+  await challenge(id, b.turnstile_token, meta, "signup");
   const email = b.email.trim().toLowerCase();
   const existing = await id.db.selectFrom("users").select("id").where("email", "=", email).executeTakeFirst();
   // same answer either way: sign-up never reveals whether an address has an account
@@ -122,7 +155,7 @@ export async function startRecovery(
   b: { email: string; turnstile_token: string },
   meta: RequestMeta,
 ): Promise<void> {
-  if (!(await id.turnstile(b.turnstile_token, meta.ip))) throw new ApiError("turnstile_failed");
+  await challenge(id, b.turnstile_token, meta, "recovery");
   const email = b.email.trim().toLowerCase();
   const user = await id.db.selectFrom("users").select(["id", "status"]).where("email", "=", email).executeTakeFirst();
   if (user?.status !== "active") {
