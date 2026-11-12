@@ -240,6 +240,34 @@ describe("sign-up and sign-in", () => {
     ).toEqual([]);
   });
 
+  it("every sign-in and sign-up start asks for Google's account chooser (a retry can pick another account)", async () => {
+    for (const body of [{}, { intent: "signin" }, { intent: "signup" }, { intent: "signin", next: "/payments" }]) {
+      const st = await start(body);
+      expect(new URL(st.url).searchParams.getAll("prompt"), JSON.stringify(body)).toEqual(["select_account"]);
+    }
+  });
+
+  it("email_exists, then retry with a different Google account: a fresh flow that signs up", async () => {
+    const owner = await signUp(s, `retry${Date.now()}@shop.test`);
+    const refused = await flow({ sub: `7${Date.now()}`, email: owner.email }, { intent: "signup" });
+    expect(refused.location).toBe(`${ORIGIN}/signup?google_error=email_exists`);
+    // the flow cookie is cleared with the error, so nothing of the failed flow is reused
+    expect(setCookies(refused.r.headers["set-cookie"])).toContain(
+      "__Host-np_google=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0",
+    );
+    const retry = await flow(fresh("other"), { intent: "signup" });
+    expect(retry.st.url).not.toBe(refused.st.url);
+    expect(new URL(retry.st.url).searchParams.get("prompt")).toBe("select_account");
+    expect(retry.location).toBe(`${ORIGIN}/setup`);
+    expect(retry.session).toBeDefined();
+  });
+
+  it("a sign-in page error keeps the safe next path for the retry", async () => {
+    const owner = await signUp(s, `next${Date.now()}@shop.test`);
+    const r = await flow({ sub: `6${Date.now()}`, email: owner.email }, { next: "/payments?status=succeeded" });
+    expect(r.location).toBe(`${ORIGIN}/signin?google_error=email_exists&next=%2Fpayments%3Fstatus%3Dsucceeded`);
+  });
+
   it("a disabled linked user is refused", async () => {
     const u = fresh("disabled");
     await flow(u);

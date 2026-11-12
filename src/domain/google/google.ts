@@ -27,6 +27,12 @@ export const GOOGLE_ENDPOINTS = {
 } as const;
 
 export const GOOGLE_SCOPES = "openid email profile";
+/**
+ * Sent on every flow (sign-in, sign-up, link): Google shows its account chooser, so a user with several
+ * Google accounts picks one each time instead of Google reusing the last one. Without it a refused
+ * account (`email_exists`, `identity_in_use`, `email_unverified`) is selected again on every retry.
+ */
+export const GOOGLE_PROMPT = "select_account";
 export const FLOW_MS = GOOGLE_FLOW_TTL_SECONDS * 1000;
 export const PASSKEY_SETUP_MS = PASSKEY_SETUP_WINDOW_SECONDS * 1000;
 /** Flow starts per client IP: 30 per 10 minutes (burst 30), before the gateway's anonymous limit. */
@@ -150,10 +156,19 @@ export function passkeySetupUntil(o: {
 export type FlowPurpose = "signin" | "link";
 export type FlowIntent = "signin" | "signup";
 
-/** Dashboard page for a failed flow (`?google_error=`). */
-export function errorPath(purpose: FlowPurpose | null, intent: FlowIntent | null, error: GoogleSignInError): string {
+/**
+ * Dashboard page for a failed flow (`?google_error=`). A sign-in page error keeps the flow's safe `next`
+ * path, so a retry from that page still lands where the user was going.
+ */
+export function errorPath(
+  purpose: FlowPurpose | null,
+  intent: FlowIntent | null,
+  error: GoogleSignInError,
+  next: string | null = null,
+): string {
   const page = purpose === "link" ? "/settings/account" : intent === "signup" ? "/signup" : "/signin";
-  return `${page}?google_error=${error}`;
+  const keep = page === "/signin" && isSafeNext(next) ? `&next=${encodeURIComponent(next)}` : "";
+  return `${page}?google_error=${error}${keep}`;
 }
 
 /** Dashboard page after success: new accounts go to onboarding, links back to settings. */

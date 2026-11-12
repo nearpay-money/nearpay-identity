@@ -97,7 +97,6 @@ async function startFlow(
         state,
         nonce,
         codeChallenge: pkceChallenge(verifier),
-        selectAccount: f.purpose === "link",
       }),
       expires_at: Math.floor(expires.getTime() / 1000),
     },
@@ -165,10 +164,11 @@ export async function callback(
     location: `${origin}${path}`,
     cookies: [...cookies, ...extra],
   });
+  let next: string | null = null; // the flow's next path, once the flow is known
   const fail = (purpose: FlowPurpose | null, intent: FlowIntent | null, error: GoogleSignInError, why?: string) => {
     if (error !== "cancelled") id.metrics.loginFailure();
     id.log.info({ provider: "google", error, why, purpose }, "google sign-in did not complete");
-    return go(errorPath(purpose, intent, error));
+    return go(errorPath(purpose, intent, error, next));
   };
   if (!id.google) return fail(null, null, "disabled");
 
@@ -194,6 +194,7 @@ export async function callback(
     : null;
   if (!taken?.ok) return fail(taken?.f.purpose ?? null, taken?.f.intent ?? null, "state_invalid", "flow");
   const f = taken.f;
+  next = f.next_path;
   if (q.error) {
     const e =
       q.error === "access_denied"
