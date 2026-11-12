@@ -9,6 +9,7 @@ import {
   checkIdTokenClaims,
   GOOGLE_ENDPOINTS,
   GOOGLE_ISSUERS,
+  GOOGLE_PROMPT,
   GOOGLE_SCOPES,
 } from "../../domain/google/google.js";
 
@@ -39,7 +40,12 @@ export class GoogleUnavailable extends Error {}
 export interface GoogleOidc {
   readonly clientId: string;
   readonly redirectUri: string;
-  authorizationUrl(p: { state: string; nonce: string; codeChallenge: string; selectAccount?: boolean }): string;
+  /**
+   * Always asks Google for the account chooser (`prompt=select_account`), for sign-in, sign-up and link:
+   * otherwise a browser signed in to Google silently reuses the last account, and a user refused for that
+   * account (e.g. `email_exists`) could never pick another one on retry.
+   */
+  authorizationUrl(p: { state: string; nonce: string; codeChallenge: string }): string;
   /** The ID token of an authorization code. */
   exchangeCode(code: string, codeVerifier: string): Promise<string>;
   /** Signature (JWKS, RS256), `iss`, `aud`, `exp`/`iat` (30 s tolerance), then the claim checks. */
@@ -71,7 +77,7 @@ export function googleOidc(c: GoogleClientConfig): GoogleOidc {
         nonce: p.nonce,
         code_challenge: p.codeChallenge,
         code_challenge_method: "S256",
-        ...(p.selectAccount ? { prompt: "select_account" } : {}),
+        prompt: GOOGLE_PROMPT,
       }).toString();
       return u.toString();
     },

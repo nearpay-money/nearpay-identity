@@ -10,6 +10,7 @@ import {
   decideSignIn,
   errorPath,
   flowCookie,
+  GOOGLE_PROMPT,
   isSafeNext,
   passkeyAddGate,
   passkeySetupUntil,
@@ -119,6 +120,14 @@ describe("decisions", () => {
     expect(errorPath(null, null, "disabled")).toBe("/signin?google_error=disabled");
     expect(errorPath("signin", "signup", "email_exists")).toBe("/signup?google_error=email_exists");
     expect(errorPath("link", null, "identity_in_use")).toBe("/settings/account?google_error=identity_in_use");
+    // the sign-in page keeps a safe next path for the retry; sign-up and settings never carry one
+    expect(errorPath("signin", "signin", "email_exists", "/payments?x=1&y=2")).toBe(
+      "/signin?google_error=email_exists&next=%2Fpayments%3Fx%3D1%26y%3D2",
+    );
+    expect(errorPath("signin", "signin", "cancelled", "//evil")).toBe("/signin?google_error=cancelled");
+    expect(errorPath(null, null, "state_invalid", "/x")).toBe("/signin?google_error=state_invalid&next=%2Fx");
+    expect(errorPath("signin", "signup", "email_exists", "/x")).toBe("/signup?google_error=email_exists");
+    expect(errorPath("link", null, "identity_in_use", "/x")).toBe("/settings/account?google_error=identity_in_use");
     expect(successPath({ purpose: "link" })).toBe("/settings/account?google=linked");
     expect(successPath({ purpose: "signin", created: true, next: "/x" })).toBe("/setup");
     expect(successPath({ purpose: "signin", created: false, next: "/x?y=1" })).toBe("/x?y=1");
@@ -189,7 +198,7 @@ describe("OIDC client", () => {
       redirectUri: "https://d/cb",
       keys: (await keys()).jwks,
     });
-    const u = new URL(c.authorizationUrl({ state: "st", nonce: "no", codeChallenge: "ch", selectAccount: true }));
+    const u = new URL(c.authorizationUrl({ state: "st", nonce: "no", codeChallenge: "ch" }));
     expect(u.origin + u.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
     expect(Object.fromEntries(u.searchParams)).toEqual({
       response_type: "code",
@@ -202,9 +211,20 @@ describe("OIDC client", () => {
       code_challenge_method: "S256",
       prompt: "select_account",
     });
-    expect(new URL(c.authorizationUrl({ state: "a", nonce: "b", codeChallenge: "c" })).searchParams.has("prompt")).toBe(
-      false,
-    );
+  });
+
+  it("always asks for Google's account chooser, so a retry can pick another account", async () => {
+    const c = googleOidc({
+      clientId: CLIENT,
+      clientSecret: "s",
+      redirectUri: "https://d/cb",
+      keys: (await keys()).jwks,
+    });
+    for (let i = 0; i < 3; i++)
+      expect(
+        new URL(c.authorizationUrl({ state: `s${i}`, nonce: "b", codeChallenge: "c" })).searchParams.getAll("prompt"),
+      ).toEqual([GOOGLE_PROMPT]);
+    expect(GOOGLE_PROMPT).toBe("select_account");
   });
 
   it("verifies signature, iss, aud, exp and the nonce", async () => {
