@@ -92,7 +92,8 @@ function base(
   extra: Pick<
     Identity,
     "lookups" | "turnstile" | "cache" | "dashboardOrigin" | "webauthn" | "recoveryLockMs" | "console"
-  >,
+  > &
+    Partial<Pick<Identity, "turnstileOutageLimit">>,
   now: () => number,
 ): Mutable<Identity> {
   return {
@@ -166,6 +167,7 @@ export function createApi(config: ApiConfig, deps: ServiceDeps = {}): { service:
     {
       lookups: deps.lookups ?? chainLookups({ nearRpcUrls: config.nearRpcUrls, evmRpcUrls: config.evmRpcUrls }),
       turnstile: deps.turnstile ?? turnstile({ secret: config.turnstileSecret, env: config.env }),
+      turnstileOutageLimit: config.turnstileOutageLimit,
       cache,
       dashboardOrigin: config.dashboardOrigin,
       webauthn: { rpId: config.webauthnRpId, rpName: "NearPay", origins: config.webauthnOrigins },

@@ -75,23 +75,56 @@ describe("service clients", () => {
 });
 
 describe("turnstile", () => {
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
   it("answers Cloudflare's test secrets locally outside the server stage", async () => {
-    expect(await turnstile({ secret: "1x0000000000000000000000000000000AA", env: "local" })("t", null)).toBe(true);
-    expect(await turnstile({ secret: "2x0000000000000000000000000000000AA", env: "local" })("t", null)).toBe(false);
+    expect(await turnstile({ secret: "1x0000000000000000000000000000000AA", env: "local" })("t", null)).toBe("ok");
+    expect(await turnstile({ secret: "2x0000000000000000000000000000000AA", env: "local" })("t", null)).toBe("failed");
+    expect(await turnstile({ secret: "3x0000000000000000000000000000000AA", env: "test" })("t", null)).toBe("failed");
   });
   it("calls siteverify otherwise", async () => {
     const calls: string[] = [];
     const f = (async (_u: string, init: RequestInit) => {
       calls.push(String(init.body));
-      return new Response(JSON.stringify({ success: true }), { headers: { "content-type": "application/json" } });
+      return json({ success: true });
     }) as unknown as typeof fetch;
     expect(
       await turnstile({ secret: "1x0000000000000000000000000000000AA", env: "server", fetch: f })("tok", "1.2.3.4"),
-    ).toBe(true);
+    ).toBe("ok");
     expect(calls[0]).toContain("response=tok");
     expect(calls[0]).toContain("remoteip=1.2.3.4");
-    const bad = (async () => new Response("no", { status: 500 })) as unknown as typeof fetch;
-    await expect(turnstile({ secret: "real", env: "local", fetch: bad })("tok", null)).rejects.toThrow(/500/);
+    const no = (async () =>
+      json({ success: false, "error-codes": ["invalid-input-response"] })) as unknown as typeof fetch;
+    expect(await turnstile({ secret: "real", env: "server", fetch: no })("tok", null)).toBe("failed");
+  });
+  // IDENTITY-1 (audit 2026-11-12): an outage is `unavailable` (the caller applies the outage limit), never a pass and
+  // never an exception (a 500 on sign-up)
+  it("reports a siteverify outage as unavailable: 5xx, 429, network error, timeout, unreadable answer", async () => {
+    const answers: Array<[string, typeof fetch]> = [
+      ["503", (async () => new Response("down", { status: 503 })) as unknown as typeof fetch],
+      ["500", (async () => new Response("no", { status: 500 })) as unknown as typeof fetch],
+      ["429", (async () => new Response("slow down", { status: 429 })) as unknown as typeof fetch],
+      [
+        "network",
+        (async () => {
+          throw new TypeError("fetch failed");
+        }) as unknown as typeof fetch,
+      ],
+      ["not json", (async () => new Response("<html>", { status: 200 })) as unknown as typeof fetch],
+    ];
+    for (const [what, f] of answers)
+      expect(await turnstile({ secret: "real", env: "server", fetch: f })("tok", null), what).toBe("unavailable");
+    const hang = ((_u: string, init: RequestInit) =>
+      new Promise<Response>((_, reject) =>
+        init.signal?.addEventListener("abort", () => reject(init.signal?.reason)),
+      )) as unknown as typeof fetch;
+    expect(await turnstile({ secret: "real", env: "server", fetch: hang, timeoutMs: 20 })("tok", null)).toBe(
+      "unavailable",
+    );
+  });
+  it("a client error from siteverify (bad secret, bad request) fails the challenge", async () => {
+    const bad = (async () => new Response("bad", { status: 400 })) as unknown as typeof fetch;
+    expect(await turnstile({ secret: "real", env: "server", fetch: bad })("tok", null)).toBe("failed");
   });
   // audit finding 2: the always-pass test secret is answered locally only for NP_ENV local/test
   it("never answers a test secret locally on any stage other than local/test", async () => {
@@ -99,14 +132,14 @@ describe("turnstile", () => {
       const calls: string[] = [];
       const f = (async (_u: string, init: RequestInit) => {
         calls.push(String(init.body));
-        return new Response(JSON.stringify({ success: false }), { headers: { "content-type": "application/json" } });
+        return json({ success: false });
       }) as unknown as typeof fetch;
       expect(await turnstile({ secret: "1x0000000000000000000000000000000AA", env, fetch: f })("tok", null)).toBe(
-        false,
+        "failed",
       );
       expect(calls).toHaveLength(1);
     }
-    expect(await turnstile({ secret: "1x0000000000000000000000000000000AA", env: "test" })("t", null)).toBe(true);
+    expect(await turnstile({ secret: "1x0000000000000000000000000000000AA", env: "test" })("t", null)).toBe("ok");
   });
 });
 

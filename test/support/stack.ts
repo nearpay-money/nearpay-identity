@@ -42,6 +42,7 @@ import type { ApiConfig, WorkerConfig } from "../../src/config.js";
 import { createAuthzCache } from "../../src/infra/cache.js";
 import type { GoogleOidc } from "../../src/infra/clients/google.js";
 import { httpPeers } from "../../src/infra/clients/peers.js";
+import type { TurnstileVerifier } from "../../src/infra/clients/turnstile.js";
 import type { OwnershipLookups } from "../../src/infra/crypto/attestation.js";
 import { MIGRATIONS_DIR } from "../../src/infra/db/migrations.js";
 import type { DB } from "../../src/infra/db/schema.js";
@@ -112,6 +113,8 @@ export interface StackOptions {
   console?: Partial<ConsoleConfig>;
   /** Continue with Google client (tests: pointed at test/support/google.ts); default off. */
   google?: GoogleOidc | null;
+  /** Turnstile verifier over the always-pass test secret (e.g. a siteverify outage). */
+  turnstile?: TurnstileVerifier;
 }
 
 /** Default mock answers: every asset/chain supported, screening allows, mail accepted. */
@@ -250,6 +253,7 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     natsUrl: nats?.url,
     serviceClientsFile: clientsFile,
     turnstileSecret: "1x0000000000000000000000000000000AA",
+    turnstileOutageLimit: 5,
     webauthnRpId: RP_ID,
     webauthnOrigins: [ORIGIN],
     dashboardOrigin: ORIGIN,
@@ -277,6 +281,7 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     lookups,
     cache: apiCache,
     google: o.google ?? null,
+    ...(o.turnstile ? { turnstile: o.turnstile } : {}),
     ...(o.now ? { now: o.now } : {}),
   });
   await api.start();

@@ -54,7 +54,7 @@ try {
             throw new Error("not available in the ops CLI");
           },
         },
-        turnstile: async () => false,
+        turnstile: async () => "failed" as const,
         cache,
         now: Date.now,
       },
